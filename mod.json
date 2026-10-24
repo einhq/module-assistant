@@ -1,0 +1,137 @@
+{
+  "name": "assistant",
+  "version": "0.1.0",
+  "description": "Assistant: answers questions by running EiN's commands for the user, with what the installed modules offer it",
+  "coreApi": "^0.1.0",
+  "imports": {
+    "@assistant/agent": "./lib/agent.ts",
+    "@assistant/answer-links": "./lib/answer-links.ts",
+    "@assistant/cards": "./lib/cards.ts",
+    "@assistant/chart": "./lib/chart.ts",
+    "@assistant/chat-store": "./lib/chat-store.ts",
+    "@assistant/command-index": "./lib/command-index.ts",
+    "@assistant/drop-ins": "./lib/drop-ins.ts",
+    "@assistant/command-clock": "./lib/command-clock.ts",
+    "@assistant/fast": "./lib/fast.ts",
+    "@assistant/llm": "./lib/llm.ts",
+    "@assistant/progress": "./lib/progress.ts",
+    "@assistant/prompt-native": "./lib/prompt-native.ts",
+    "@assistant/reply": "./lib/reply.ts",
+    "@assistant/table": "./lib/table.ts",
+    "@std/assert": "jsr:@std/assert@^1.0.16",
+    "mdast-util-from-markdown": "npm:mdast-util-from-markdown@^2.0.3"
+  },
+  "exports": {
+    "./api": "./lib/api.ts"
+  },
+  "ui": {
+    "routes": {
+      "/chart": "ui/pages/chart.tsx",
+      "/chat": "ui/pages/chat.tsx",
+      "/chat/:id": "ui/pages/chat.tsx",
+      "/about/language-model": "ui/pages/about.tsx"
+    }
+  },
+  "config": {
+    "options": [
+      {
+        "key": "CFG_LLM_URL",
+        "scope": "system",
+        "type": "string",
+        "default": "http://127.0.0.1:8190",
+        "label": "Language model address",
+        "description": "The base of an OpenAI-compatible chat API, without /v1: ours (a llama.cpp server) or a provider's, which is then named under Language model provider.",
+        "group": "Assistant",
+        "restarts": [
+          "llm-link"
+        ]
+      },
+      {
+        "key": "CFG_LLM_MODEL",
+        "scope": "system",
+        "type": "string",
+        "default": "qwen3.5-4b",
+        "label": "Language model",
+        "description": "The model name sent with each request. A llama.cpp server answers with whichever model it loaded, whatever this says.",
+        "group": "Assistant",
+        "restarts": [
+          "llm-link"
+        ]
+      },
+      {
+        "key": "CFG_LLM_KEY",
+        "scope": "system",
+        "type": "secret",
+        "default": "",
+        "label": "Language model key",
+        "description": "The bearer key the provider expects, sent only to the language model address above. Unset when the server needs none. No shell sees it, and nothing shows it once it is set.",
+        "group": "Assistant",
+        "restarts": [
+          "llm-link"
+        ]
+      },
+      {
+        "key": "CFG_LLM_PROVIDER",
+        "scope": "system",
+        "type": "string",
+        "default": "",
+        "label": "Language model provider",
+        "description": "The provider's name when the language model is a service elsewhere (OpenAI, say). The chat names it and says that questions, and what the assistant reads in the archive to answer them, are sent there. Set by the host profile.",
+        "group": "Assistant",
+        "emptyMeans": "ours, run on this host",
+        "restarts": [
+          "llm-link"
+        ]
+      },
+      {
+        "key": "CFG_LLM_CARD",
+        "scope": "system",
+        "type": "select",
+        "choices": [
+          "card",
+          "cpu"
+        ],
+        "default": "",
+        "label": "Where our language model runs",
+        "description": "card: on the graphics card, beside the share it leaves. cpu: on the processor. Set by the host profile; unused when a provider runs the model.",
+        "group": "Assistant",
+        "emptyMeans": "the host does not say",
+        "restarts": [
+          "llm-link"
+        ]
+      },
+      {
+        "key": "CFG_LLM_THINKING",
+        "scope": "system",
+        "type": "select",
+        "choices": [
+          "1",
+          "0"
+        ],
+        "default": "",
+        "label": "Think before answering",
+        "description": "1 asks the model to think before it answers, 0 asks it not to. Sent as llama.cpp's chat_template_kwargs, so only a server that reads them honours it. Empty sends nothing and the server decides.",
+        "group": "Assistant",
+        "emptyMeans": "the server decides"
+      },
+      {
+        "key": "CFG_LLM_MAX_TOKENS",
+        "scope": "system",
+        "type": "number",
+        "default": "2048",
+        "label": "Answer length (tokens)",
+        "description": "How many tokens the model may write in one call when thinking is not asked for. A thinking model writes its thought inside the same budget, so it may need more.",
+        "group": "Assistant"
+      },
+      {
+        "key": "CFG_LLM_WAIT",
+        "scope": "system",
+        "type": "number",
+        "default": "180",
+        "label": "Wait for the language model (seconds)",
+        "description": "How long a question to the assistant waits for a language model that is not there, restarting or still loading its model, before the chat says the assistant is unavailable. The chat says it is waiting meanwhile. 0 gives up at once. The search box never waits; it reads the words without the model.",
+        "group": "Assistant"
+      }
+    ]
+  }
+}

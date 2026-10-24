@@ -1,0 +1,138 @@
+{
+  "note": "Questions for agent-eval, each asked once as the account running it (or --user), with `context` as what the app shows. `commands` are those that do the job: reaching any of them counts, and none means the question is answered without one. `resolvers` turn a name into a path, so calling one first is not a wrong first choice.",
+  "questions": [
+    {
+      "id": "no-tool-greeting",
+      "bucket": "no-tool",
+      "lang": "sv",
+      "ask": "Hej! Vad kan du hjälpa mig med?",
+      "commands": []
+    },
+    {
+      "id": "no-tool-thanks",
+      "bucket": "no-tool",
+      "lang": "sv",
+      "ask": "Tack, det var precis vad jag ville ha!",
+      "commands": []
+    },
+    {
+      "id": "no-tool-capability",
+      "bucket": "no-tool",
+      "lang": "en",
+      "ask": "Can you delete my entire archive and email the photos to my brother?",
+      "commands": []
+    },
+    {
+      "id": "no-tool-arithmetic",
+      "bucket": "no-tool",
+      "lang": "sv",
+      "ask": "Vad blir 17 gånger 24?",
+      "commands": []
+    },
+    {
+      "id": "system-services",
+      "bucket": "system",
+      "lang": "sv",
+      "ask": "Vilka tjänster körs?",
+      "commands": [
+        "service-list",
+        "service-status"
+      ]
+    },
+    {
+      "id": "system-services-table",
+      "bucket": "system",
+      "lang": "en",
+      "ask": "Show me all services as a table",
+      "commands": [
+        "service-list",
+        "service-status"
+      ]
+    },
+    {
+      "id": "system-disk",
+      "bucket": "system",
+      "lang": "en",
+      "ask": "How much disk space is used?",
+      "commands": [
+        "host-metrics",
+        "df",
+        "service-list",
+        "system-info"
+      ]
+    },
+    {
+      "id": "system-pipelines",
+      "bucket": "system",
+      "lang": "sv",
+      "ask": "Finns det några pipelines som har misslyckats?",
+      "commands": [
+        "pipeline-overview",
+        "pipeline-instances",
+        "pipeline-status",
+        "pipeline-list"
+      ]
+    },
+    {
+      "id": "system-users",
+      "bucket": "system",
+      "lang": "en",
+      "ask": "Which users are there?",
+      "commands": [
+        "user-list"
+      ]
+    },
+    {
+      "id": "system-modules",
+      "bucket": "system",
+      "lang": "sv",
+      "ask": "Vilka moduler är installerade?",
+      "commands": [
+        "mod-list"
+      ]
+    },
+    {
+      "id": "system-restart",
+      "bucket": "system",
+      "lang": "sv",
+      "ask": "Starta om tjänsten metrics-sampler",
+      "commands": [
+        "service-restart",
+        "service"
+      ]
+    },
+    {
+      "id": "shell-make-a-file",
+      "bucket": "multi",
+      "lang": "en",
+      "ask": "Run a command to touch a file called test.txt",
+      "commands": [
+        "mkfile"
+      ]
+    },
+    {
+      "id": "page-settings",
+      "bucket": "page",
+      "lang": "sv",
+      "ask": "Vad är det här för sida?",
+      "context": {
+        "route": "/settings",
+        "section": "Settings",
+        "title": "Settings"
+      },
+      "commands": []
+    },
+    {
+      "id": "page-system",
+      "bucket": "page",
+      "lang": "en",
+      "ask": "What am I looking at?",
+      "context": {
+        "route": "/system",
+        "section": "System",
+        "title": "System dashboard"
+      },
+      "commands": []
+    }
+  ]
+}

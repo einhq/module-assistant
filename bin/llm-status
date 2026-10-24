@@ -1,0 +1,132 @@
+#!ts
+/**
+ * The assistant's language model: whose it is, where it runs, and whether it answers.
+ *
+ * The host profile says whose (`CFG_LLM_PROVIDER`): ours, run on this host by ein/llm, or a
+ * provider's service elsewhere, by name, so the chat can say that questions, and what the assistant
+ * reads in the archive to answer them, are sent there. Of ours it says where it runs
+ * (`CFG_LLM_CARD`): `card` on the graphics card beside the share it leaves, `cpu` on the processor.
+ *
+ * Plain, it is what the chat input polls, so it says only what the host profile says and asks the
+ * model nothing: a provider's is not asked every few seconds while a chat is open.
+ *
+ * `--checks` answers `health` (the `llm-link` service's `checkCommand`): whether it answers, where it
+ * is, and whether its model has been tried with the assistant's prompts (`TRIED_MODELS`). `--brief`
+ * is the same in one line, beside the `llm-link` service in `service-list --detail`. None of them
+ * fails: a chat that cannot answer holds up no work of the archive's, so a person is told by a
+ * warning, and the verdict stays about the work.
+ *
+ * The model is asked only for a caller who may use it (`mayUseModel`, as `chat` does): the request
+ * carries the provider's key to whatever `CFG_LLM_URL` says, and a command line can say anything.
+ * Anyone else is told what the host profile says, and `--checks` tells them nothing.
+ */
+
+import type { CmdReturn, Command, HealthCheck } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { LlmStatus } from '../lib/api.ts';
+import { llmAuth, llmBase, llmModel, mayUseModel, TRIED_MODELS } from '../lib/llm.ts';
+
+const CARDS = ['card', 'cpu'] as const;
+
+/** The models the server offers (`GET /v1/models`, which every OpenAI-compatible one answers), or null when it does not answer. */
+const offeredModels = async (cmd: Command, base: string): Promise<string[] | null> => {
+  try {
+    const response = await fetch(`${base}/v1/models`, { headers: await llmAuth(cmd), signal: AbortSignal.timeout(2000) });
+    if (!response.ok) {
+      await response.body?.cancel();
+      return null;
+    }
+    const body = await response.json() as { data?: { id?: unknown }[] };
+    return (body.data ?? []).map((model) => model.id).filter((id): id is string => typeof id === 'string');
+  } catch {
+    return null;
+  }
+};
+
+/** What the host profile says. */
+const readStatus = (cmd: Command): LlmStatus => {
+  const url = llmBase(cmd);
+  const model = llmModel(cmd);
+  const provider = cmd.env.CFG_LLM_PROVIDER?.trim();
+  if (provider) return { url, model, kind: 'external', provider };
+  const card = CARDS.find((card) => card === cmd.env.CFG_LLM_CARD);
+  return { url, model, kind: 'ours', ...(card ? { card } : {}) };
+};
+
+/** Where ours runs, in words; nothing when the host does not say. */
+const placement = (status: LlmStatus): string | undefined => status.card === 'cpu' ? 'on the CPU' : status.card === 'card' ? 'on the card' : undefined;
+
+/** What `health` is told: whether it answers and where it is, and whether its model is one the assistant was tried with. */
+const checksOf = (status: LlmStatus, offered: string[] | null): HealthCheck[] => {
+  const where = status.kind === 'external' ? `${status.provider} at ${status.url}` : status.url;
+  if (offered === null) return [{ name: 'llm', state: 'warn', reason: `${where} is not answering; the chat cannot answer until it does` }];
+
+  // A server of ours offers the one model it loaded; a provider's offers many, and is asked for one.
+  const model = status.kind === 'ours' ? offered[0] ?? status.model : status.model;
+  const checks: HealthCheck[] = [];
+  if (status.kind === 'external') {
+    checks.push({
+      name: 'llm',
+      state: 'ok',
+      reason: `${status.provider}'s ${status.model} at ${status.url}: questions, and what the assistant reads to answer them, leave this host`,
+    });
+    if (!offered.includes(model)) checks.push({ name: 'llm model', state: 'warn', reason: `${status.provider} does not offer ${model}; the chat's questions to it fail` });
+  } else {
+    const on = placement(status);
+    checks.push({ name: 'llm', state: 'ok', reason: `ours, ${model} at ${where}${on ? `, ${on}` : ''}` });
+  }
+  if (!TRIED_MODELS.includes(model)) {
+    checks.push({
+      name: 'llm model',
+      state: 'warn',
+      reason: `${model} is untried: the prompts, the fast path and the eval set are tuned for ${TRIED_MODELS.join(', ')}; run agent-eval against it before trusting it`,
+    });
+  }
+  return checks;
+};
+
+const llmStatus = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { boolean: ['checks', 'brief'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const mayAsk = await mayUseModel(cmd);
+  if (flags.checks || flags.brief) {
+    const checks = mayAsk ? checksOf(readStatus(cmd), await offeredModels(cmd, llmBase(cmd))) : [];
+    if (flags.brief) {
+      await cmd.writeLn(checks.map((check) => check.reason).join('; '));
+    } else if (cmd.json) {
+      await cmd.writeJSON(checks satisfies HealthCheck[]);
+    } else {
+      for (const check of checks) await cmd.writeLn(`${check.state.padEnd(5)} ${check.name}  ${check.reason}`);
+    }
+    return 0;
+  }
+
+  const status = readStatus(cmd);
+  if (cmd.json) {
+    await cmd.writeJSON(status satisfies LlmStatus);
+    return 0;
+  }
+  if (status.kind === 'external') {
+    await cmd.writeLn(`${status.url}: ${status.provider}'s ${status.model}, outside this host`);
+    return 0;
+  }
+  const on = placement(status);
+  await cmd.writeLn(`${status.url}: ours${on ? `, ${on}` : ''}`);
+  return 0;
+};
+
+llmStatus.spec = {
+  name: 'llm-status',
+  effect: 'read' as const,
+  description: "Whose the assistant's language model is, where it runs, and (with --checks) whether it answers",
+  examples: ['llm-status', 'llm-status --checks'],
+  flags: [
+    { name: 'checks', type: 'bool' as const, description: 'The checks health reads: whether it answers, where it is, whether its model has been tried' },
+    { name: 'brief', type: 'bool' as const, description: 'The checks in one line (used by service-list --detail)' },
+  ],
+  returns: "url, model, kind (ours or external), provider for an external one, card (card or cpu) for ours. With --checks, health's checks.",
+};
+
+export default llmStatus;

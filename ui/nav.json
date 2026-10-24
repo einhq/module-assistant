@@ -1,0 +1,32 @@
+{
+  "sidebar": [
+    {
+      "id": "assistant.chat",
+      "section": "main",
+      "label": "Chat",
+      "icon": "message-circle",
+      "to": "/chat",
+      "order": 20
+    }
+  ],
+  "topbar": [
+    {
+      "id": "assistant.chat",
+      "title": "Chat",
+      "icon": "message-circle",
+      "action": {
+        "drawer": "/chat"
+      },
+      "order": 10
+    }
+  ],
+  "panels": [
+    {
+      "id": "assistant.about",
+      "slot": "about.services",
+      "label": "Language model",
+      "icon": "message-circle",
+      "route": "/about/language-model"
+    }
+  ]
+}

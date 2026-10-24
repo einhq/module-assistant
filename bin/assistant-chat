@@ -1,0 +1,101 @@
+#!ts
+/** Manage the authenticated user's durable VFS chat logs. */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { createChat, deleteChat, listChats, parseResults, readChat, settleProposal } from '@assistant/chat-store';
+import { ASSISTANT_PROGRESS_ID, readAssistantProgress } from '@assistant/progress';
+import { suggestedQuestions } from '@assistant/drop-ins';
+import type { SuggestedQuestions } from '@assistant/api';
+
+const assistantChat = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['error', 'results', 'script'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const [action, id, ...extra] = flags._.map(String);
+  const usage =
+    'assistant-chat: expected list, create, read <id>, delete <id>, progress <turn-id>, examples, or outcome <id> <message> ran|failed|dismissed [--error <text>] [--results <json>] [--script <text>]\n';
+  if (action === 'outcome') {
+    const [messageId, status] = extra;
+    if (!id || !messageId || (status !== 'ran' && status !== 'failed' && status !== 'dismissed') || extra.length > 2) {
+      await cmd.writeError(usage);
+      return 1;
+    }
+  } else if (
+    !action || extra.length > 0 || ((action === 'read' || action === 'delete' || action === 'progress') && !id) ||
+    ((action === 'list' || action === 'create' || action === 'examples') && id) ||
+    (action === 'progress' && !ASSISTANT_PROGRESS_ID.test(id))
+  ) {
+    await cmd.writeError(usage);
+    return 1;
+  }
+
+  try {
+    let result: unknown;
+    switch (action) {
+      case 'list':
+        result = { chats: await listChats(cmd) };
+        break;
+      case 'create':
+        result = { chat: await createChat(cmd) };
+        break;
+      case 'read':
+        result = await readChat(cmd, id);
+        break;
+      case 'delete':
+        await deleteChat(cmd, id);
+        result = { ok: true };
+        break;
+      case 'examples':
+        // What the modules suggest asking, for a chat with nothing in it yet.
+        result = { examples: await suggestedQuestions(cmd) } satisfies SuggestedQuestions;
+        break;
+      case 'progress':
+        // The turn in flight, or `phase: null` once it has ended (or never began).
+        result = readAssistantProgress(cmd, id) ?? { phase: null };
+        break;
+      case 'outcome':
+        // The drawer ran (or dismissed) a proposed change; the log remembers how it went.
+        result = {
+          message: await settleProposal(
+            cmd,
+            id,
+            extra[0],
+            extra[1] as 'ran' | 'failed' | 'dismissed',
+            flags.error,
+            flags.results === undefined ? undefined : parseResults(flags.results),
+            flags.script,
+          ),
+        };
+        break;
+      default:
+        await cmd.writeError(`assistant-chat: unknown action '${action}'\n`);
+        return 1;
+    }
+    if (cmd.json) await cmd.writeJSON(result);
+    else await cmd.writeYAML(result);
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`assistant-chat: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+assistantChat.spec = {
+  name: 'assistant-chat',
+  effect: 'read' as const,
+  description: 'List, create, read, or delete durable assistant chats; read a turn in flight; record how a proposal ended; the questions the modules suggest',
+  args: [
+    { name: 'action', writes: ['create', 'delete', 'outcome'], type: 'string' as const, description: 'list, create, read, delete, progress, examples, or outcome' },
+    { name: 'id', type: 'string' as const, description: 'chat id for read/delete/outcome', optional: true },
+    { name: 'message', type: 'string' as const, description: 'outcome: id of the message carrying the proposal', optional: true },
+    { name: 'status', type: 'string' as const, description: 'outcome: ran, failed, or dismissed', optional: true },
+  ],
+  flags: [
+    { name: 'error', type: 'string' as const, description: 'outcome: what the failed command said' },
+    { name: 'results', type: 'string' as const, description: 'outcome: JSON array of {command, ok, exitCode?, output}, what each command said' },
+    { name: 'script', type: 'string' as const, description: 'outcome: the block as run, when the user edited it first' },
+  ],
+};
+
+export default assistantChat;

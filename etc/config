@@ -1,0 +1,7 @@
+# The assistant's own choice of settings, linked as /etc/config.d/assistant by mod setup and
+# sourced before /etc/config, so a value the administrator sets there wins over these.
+
+# Ask the assistant's language model where something reads a person's words with one.
+export CFG_LANGUAGE_MODEL='llm-chat'
+# Find shell commands by what they are for, in the documentation's command search.
+export CFG_COMMAND_FINDER='assistant-commands'

@@ -1,0 +1,77 @@
+#!ts
+/**
+ * llm-chat — ask the assistant's language model one thing, and print what it answers.
+ *
+ * The message goes after an optional system text and earlier turns, with no tools: what the model
+ * writes is the answer. It is the command the core setting `CFG_LANGUAGE_MODEL` names (set in the
+ * assistant's `etc/config`), so a module that reads a person's words with a model — the search
+ * box's parser — asks through the setting and names no module. A failure to reach the model is a
+ * failure of the command, for the caller to fall back from.
+ */
+
+import type { LanguageModelReply } from '@ein/api';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { chat, type LlmMessage } from '@assistant/llm';
+
+/** Earlier turns as `--history` gives them: user and assistant messages, in order. */
+const historyOf = (raw: string | undefined): LlmMessage[] | undefined => {
+  if (raw === undefined) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return undefined;
+    const turns = parsed.filter((turn) => turn && (turn.role === 'user' || turn.role === 'assistant') && typeof turn.content === 'string');
+    return turns.length === parsed.length ? turns.map((turn) => ({ role: turn.role, content: turn.content })) : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const llmChat = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['system', 'history', 'max-tokens', 'timeout'], boolean: ['think'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const message = (flags._ as string[]).join(' ').trim();
+  const history = historyOf(flags.history);
+  if (!message || !history) {
+    await cmd.writeError(`llm-chat: ${!message ? 'missing message' : '--history is not a list of user and assistant turns'}\n`);
+    return 1;
+  }
+  const maxTokens = parseInt(flags['max-tokens'] ?? '', 10);
+  const timeout = parseInt(flags.timeout ?? '', 10);
+
+  try {
+    const reply = await chat(cmd, [...(flags.system ? [{ role: 'system' as const, content: flags.system }] : []), ...history, { role: 'user', content: message }], {
+      ...(Number.isFinite(maxTokens) && maxTokens > 0 ? { maxTokens } : {}),
+      ...(Number.isFinite(timeout) && timeout > 0 ? { timeoutSeconds: timeout } : {}),
+      thinking: flags.think === true,
+    });
+    if (cmd.json) await cmd.writeJSON({ content: reply.content, model: reply.model } satisfies LanguageModelReply);
+    else await cmd.writeLn(reply.content);
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`llm-chat: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+llmChat.spec = {
+  name: 'llm-chat',
+  effect: 'read' as const,
+  description: "Ask the assistant's language model one thing, and print what it answers",
+  args: [
+    { name: 'message', type: 'string' as const, variadic: true, description: 'what to ask' },
+  ],
+  flags: [
+    { name: 'system', type: 'string' as const, description: 'the system text: what the model is and how to answer' },
+    { name: 'history', type: 'string' as const, description: 'earlier turns, as JSON: [{"role":"user"|"assistant","content":"…"}]' },
+    { name: 'max-tokens', type: 'number' as const, description: 'the most the answer may be (default 768)' },
+    { name: 'timeout', type: 'number' as const, description: 'seconds to wait for the answer (default 180)' },
+    { name: 'think', type: 'bool' as const, description: 'let the model think before it answers' },
+  ],
+  examples: ["llm-chat 'Vad är huvudstaden i Norge?'", "llm-chat --system 'Answer in one word.' 'The colour of the sky?'"],
+  returns: 'content, the answer, and model, the model that wrote it.',
+};
+
+export default llmChat;

@@ -1,0 +1,8 @@
+# The commands the assistant offers its own model as tools, one a line: the VFS itself, for "what
+# is in my home directory" and the like — listing, a node's attributes, a walk, and what a node
+# holds: a text file, or a log such as a person's weight (cat -t, with each entry's time). Without
+# cat the model could only propose it as a script, and never saw what it printed.
+ls
+stat
+find
+cat

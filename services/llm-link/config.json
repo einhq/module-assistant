@@ -1,0 +1,6 @@
+{
+  "description": "Watches the assistant's language model and reports whose it is and where it runs",
+  "restartPolicy": "on-failure",
+  "statusCommand": "llm-status --brief",
+  "checkCommand": "llm-status --checks"
+}

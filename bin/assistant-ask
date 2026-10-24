@@ -1,0 +1,243 @@
+#!ts
+/**
+ * assistant-ask — one turn of the chat drawer's assistant.
+ *
+ * Takes the user's message, a durable chat id (or explicit earlier turns for non-UI callers)
+ * and what the UI is showing, runs the commands loop in @assistant/agent, and answers with text,
+ * the pictures to show, the links to offer, or a proposed change. UI conversations are append-only
+ * VFS logs under `$HOME/.chats`; both sides of a turn are stored here so closing the browser while
+ * the model works cannot lose the answer.
+ *
+ * The assistant message is stored with the turn's transcript — every call, result and answer as
+ * the model saw them — and the user message with the exact stamped text the model got. The next
+ * turn replays both, so the conversation the model service is sent begins with exactly what it read
+ * last time, and it reads only the new message (`lib/llm.ts`).
+ *
+ * It is NOT named `search-*`: `search` treats every `search-*` command on PATH as a text
+ * provider and would call this one on every text search.
+ *
+ * The command exits 0 even when it could not answer — the drawer shows the apology in
+ * `answer`, `error` says why, and `failure` whether the service was down or the model gave up
+ * on this question — because a failed exec surfaces in the UI as a broken
+ * request, and a chat should degrade to "not now", not to an error toast. The one exception is
+ * the guest where the archive is not open to it: it is refused, and nothing runs.
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { type AgentOptions, ask, DEFAULT_MAX_STEPS, transcriptFromChat } from '@assistant/agent';
+import type { AssistantReply } from '@assistant/reply';
+import type { AssistantContext } from '@assistant/api';
+import { stampedMessage } from '@assistant/prompt-native';
+import { ASSISTANT_PROGRESS_ID, beginAssistantProgress, finishAssistantProgress, setAssistantDraft, setAssistantProgress, setAssistantTimeline } from '@assistant/progress';
+import { appendChatMessage, readChat, readModelContext, type StoredChatMessage, writeModelContext } from '@assistant/chat-store';
+import { mayUseModel } from '@assistant/llm';
+
+/** An earlier turn a client without a chat log sends along (`--history`). */
+type HistoryTurn = { role: 'user' | 'assistant'; content: string };
+
+const parseHistory = (raw: unknown): HistoryTurn[] | undefined => {
+  if (raw === undefined) return [];
+  try {
+    const parsed = JSON.parse(String(raw));
+    if (!Array.isArray(parsed)) return undefined;
+    return parsed.filter((turn): turn is HistoryTurn =>
+      !!turn && typeof turn === 'object' && (turn.role === 'user' || turn.role === 'assistant') && typeof turn.content === 'string'
+    );
+  } catch {
+    return undefined;
+  }
+};
+
+/** Already-shown paths a request carries at most; beyond that the oldest may come round again. */
+const SHOWN_LIMIT = 500;
+
+/** The pictures the chat's earlier answers showed, newest first, each once, so "fler" is new ones. */
+const shownInChat = (messages: StoredChatMessage[]): string[] => {
+  const paths: string[] = [];
+  const seen = new Set<string>();
+  for (let i = messages.length - 1; i >= 0 && paths.length < SHOWN_LIMIT; i--) {
+    if (!Array.isArray(messages[i].media)) continue;
+    for (const item of messages[i].media as unknown[]) {
+      const path = item && typeof item === 'object' ? (item as { path?: unknown }).path : undefined;
+      if (typeof path !== 'string' || seen.has(path)) continue;
+      seen.add(path);
+      paths.push(path);
+      if (paths.length >= SHOWN_LIMIT) break;
+    }
+  }
+  return paths;
+};
+
+const parseContext = (raw: unknown): AssistantContext | undefined => {
+  if (raw === undefined) return {};
+  try {
+    const parsed = JSON.parse(String(raw));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    const text = (key: 'section' | 'title' | 'about') => typeof parsed[key] === 'string' && parsed[key].trim() ? { [key]: parsed[key].trim().slice(0, 200) } : {};
+    return {
+      ...(typeof parsed.route === 'string' && parsed.route ? { route: parsed.route.slice(0, 500) } : {}),
+      ...text('section'),
+      ...text('title'),
+      ...text('about'),
+      ...(typeof parsed.node === 'string' && parsed.node.startsWith('/') ? { node: parsed.node.slice(0, 500) } : {}),
+      ...(typeof parsed.lightbox === 'string' && parsed.lightbox.startsWith('/') ? { lightbox: parsed.lightbox } : {}),
+      ...(Array.isArray(parsed.shown)
+        ? { shown: parsed.shown.filter((path: unknown): path is string => typeof path === 'string' && path.startsWith('/')).slice(0, SHOWN_LIMIT) }
+        : {}),
+    };
+  } catch {
+    return undefined;
+  }
+};
+
+const assistantAsk = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['chat', 'history', 'context', 'max-steps', 'progress'], boolean: ['think', 'resume'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  // Before anything runs: the fast path searches before the model is asked.
+  if (!await mayUseModel(cmd)) {
+    await cmd.writeError('assistant-ask: permission denied: sign in to ask the assistant\n');
+    return 1;
+  }
+
+  const resume = flags.resume === true;
+  const asked = (flags._ as string[]).join(' ').trim();
+  if (!asked && !resume) {
+    await cmd.writeError('assistant-ask: missing message\n');
+    return 1;
+  }
+  if (resume && (asked || flags.chat === undefined)) {
+    await cmd.writeError('assistant-ask: --resume takes a --chat and no message\n');
+    return 1;
+  }
+  const chatId = flags.chat === undefined ? undefined : String(flags.chat);
+  const stored = chatId ? (await readChat(cmd, chatId)).messages : undefined;
+  // Going on after a proposal: only when the chat's last word is how that proposal ended.
+  if (resume && !stored?.at(-1)?.outcome) {
+    await cmd.writeError('assistant-ask: --resume: the chat does not end with a settled proposal\n');
+    return 1;
+  }
+  const message = resume ? [...stored!].reverse().find((entry) => entry.role === 'user')?.content ?? '' : asked;
+  const storedContext = chatId ? await readModelContext(cmd, chatId) : undefined;
+  const history = stored ? [] : parseHistory(flags.history);
+  if (!history) {
+    await cmd.writeError('assistant-ask: --history must be a JSON array of {role, content}\n');
+    return 1;
+  }
+  const context = parseContext(flags.context);
+  if (!context) {
+    await cmd.writeError('assistant-ask: --context must be a JSON object\n');
+    return 1;
+  }
+  // A durable chat knows what it has shown; a client without one may say so in the context.
+  if (stored) context.shown = shownInChat(stored);
+  const maxSteps = flags['max-steps'] === undefined ? DEFAULT_MAX_STEPS : parseInt(String(flags['max-steps']), 10);
+  if (!Number.isInteger(maxSteps) || maxSteps < 1) {
+    await cmd.writeError('assistant-ask: --max-steps must be a positive integer\n');
+    return 1;
+  }
+  const progressId = flags.progress === undefined ? undefined : String(flags.progress);
+  if (progressId && !ASSISTANT_PROGRESS_ID.test(progressId)) {
+    await cmd.writeError('assistant-ask: --progress must be a UUID\n');
+    return 1;
+  }
+
+  // Earlier turns as the model saw them. A chat replays its stored transcripts; a caller without
+  // one passes plain turns, which still read as a conversation.
+  const earlier = stored ? transcriptFromChat(stored) : history.map((turn) => ({ role: turn.role, content: turn.content }));
+  const sentAt = new Date();
+  if (chatId && !resume) {
+    await appendChatMessage(cmd, chatId, { role: 'user', content: message, stamped: stampedMessage(message, sentAt, context), ...(flags.think ? { think: true } : {}) });
+  }
+  if (progressId) beginAssistantProgress(cmd, progressId);
+  // Someone is watching the turn: the phase, the model streamed as it writes, the commands as they run.
+  const watched: Pick<AgentOptions, 'onModelPhase' | 'onDraft' | 'onTimeline'> = progressId
+    ? {
+      onModelPhase: (phase) => {
+        setAssistantProgress(cmd, progressId, phase);
+      },
+      onDraft: (draft) => setAssistantDraft(cmd, progressId, draft),
+      onTimeline: (timeline, running) => setAssistantTimeline(cmd, progressId, timeline, running),
+    }
+    : {};
+  let reply: Awaited<ReturnType<typeof ask>>;
+  try {
+    reply = await ask(cmd, {
+      message,
+      sentAt,
+      earlier,
+      context,
+      maxSteps,
+      ...(flags.think ? { think: true } : {}),
+      ...(resume ? { resume } : {}),
+      ...watched,
+    });
+  } finally {
+    if (progressId) finishAssistantProgress(cmd, progressId);
+  }
+  let messageId: string | undefined;
+  if (chatId) {
+    const appended = await appendChatMessage(cmd, chatId, {
+      role: 'assistant',
+      content: reply.answer,
+      media: reply.media,
+      links: reply.links,
+      search: reply.search,
+      ...(reply.proposal ? { proposal: reply.proposal } : {}),
+      ...(reply.cards ? { cards: reply.cards } : {}),
+      ...(reply.table ? { table: reply.table } : {}),
+      ...(reply.nodeTypes ? { nodeTypes: reply.nodeTypes } : {}),
+      steps: reply.steps,
+      ...(reply.timeline ? { timeline: reply.timeline } : {}),
+      elapsedMs: reply.elapsedMs,
+      ...(reply.timing ? { timing: reply.timing } : {}),
+      ...(reply.error ? { error: reply.error } : {}),
+      ...(reply.failure ? { failure: reply.failure } : {}),
+      transcript: reply.transcript,
+      ...(reply.modelContext ? { contextChecksum: reply.modelContext.checksum } : {}),
+      ...(reply.cache ? { cache: reply.cache } : {}),
+    });
+    // The drawer settles a proposal by the stored message's id.
+    messageId = appended.id;
+    // What the model read before the conversation, when it is not what the chat has on record: the
+    // first turn, or a command or the prompt changed since the last one (`ModelContext`).
+    if (reply.modelContext && reply.modelContext.checksum !== storedContext?.checksum) {
+      await writeModelContext(cmd, chatId, { ...reply.modelContext, since: new Date().toISOString() });
+    }
+  }
+
+  // The transcript is for the next turn, not for the drawer.
+  const { transcript: _transcript, modelContext: _context, ...shown } = reply;
+  const output: AssistantReply = messageId ? { ...shown, messageId } : shown;
+  if (cmd.json) {
+    await cmd.writeJSON(output);
+  } else {
+    await cmd.writeYAML(output);
+  }
+  return 0;
+};
+
+assistantAsk.spec = {
+  name: 'assistant-ask',
+  effect: 'write' as const,
+  description: "Answer a question about EiN by running its commands (the chat drawer's backend)",
+  args: [
+    { name: 'message', type: 'string' as const, description: 'what the user wrote; none with --resume' },
+  ],
+  flags: [
+    { name: 'think', type: 'bool' as const, description: 'think before every model call: slower, fewer malformed commands' },
+    { name: 'resume', type: 'bool' as const, description: "go on with the chat's last turn after the user ran or declined its proposal" },
+    { name: 'chat', type: 'string' as const, description: 'durable chat id; loads and appends history in $HOME/.chats' },
+    { name: 'history', type: 'string' as const, description: 'earlier turns as a JSON array of {role: user|assistant, content}' },
+    {
+      name: 'context',
+      type: 'string' as const,
+      description: 'what the UI shows, as JSON {route?, section?, title?, about?, node?, lightbox?, shown?: [paths already shown]}',
+    },
+    { name: 'max-steps', type: 'string' as const, description: `tool calls allowed before the model must answer (default ${DEFAULT_MAX_STEPS})` },
+    { name: 'progress', type: 'string' as const, description: 'ephemeral turn id whose waiting/thinking phase may be read while this command runs' },
+  ],
+};
+
+export default assistantAsk;

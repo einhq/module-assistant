@@ -1,0 +1,69 @@
+#!ts
+/**
+ * The assistant's view of the shell's commands: find one by what it is for, judge whether a line
+ * changes anything, or rebuild the index. The plain list of every command is core's
+ * (`docs commands`). `find` and `judge` are exactly what the chat
+ * assistant's `find_commands` and `run_command` do, so a surprising answer in the drawer can be
+ * reproduced here.
+ */
+
+import type { CommandFind } from '@ein/api';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, judgeLine, parseArgs, reportUnknownFlags } from '@ein/client';
+import { commandIndex, DEFAULT_HITS, findCommands, forgetCommandIndexes, indexedSpec, lastEmbedError } from '@assistant/command-index';
+
+const usage = 'assistant-commands: expected find <words…> [--limit n], judge <line>, or reindex (every command: docs commands)\n';
+
+const assistantCommands = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['limit'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const [action, ...rest] = flags._.map(String);
+  const text = rest.join(' ').trim();
+
+  if (action === 'find' && text) {
+    const limit = flags.limit === undefined ? DEFAULT_HITS : Math.max(1, parseInt(String(flags.limit), 10) || DEFAULT_HITS);
+    const hits = await findCommands(cmd, text, limit);
+    // Core's `docs find` hands this on to the documentation's search (CFG_COMMAND_FINDER, set in etc/config).
+    if (cmd.json) await cmd.writeJSON({ hits } satisfies CommandFind);
+    else for (const hit of hits) await cmd.writeLn(`${hit.score.toFixed(2)}  ${hit.name.padEnd(24)} ${hit.effect ?? '?'}  ${hit.description ?? ''}`);
+    return 0;
+  }
+  if (action === 'judge' && text) {
+    const judgement = await judgeLine(text, (name) => indexedSpec(cmd, name));
+    if (cmd.json) await cmd.writeJSON(judgement);
+    else await cmd.writeLn([judgement.effect, ...judgement.reasons.map((reason) => `  ${reason}`)].join('\n'));
+    return 0;
+  }
+  if (action === 'reindex' && !text) {
+    forgetCommandIndexes();
+    const index = await commandIndex(cmd);
+    const embedded = [...index.values()].filter((entry) => entry.vector).length;
+    const error = embedded < index.size ? lastEmbedError() : undefined;
+    if (cmd.json) await cmd.writeJSON({ commands: index.size, embedded, ...(error ? { embedError: error } : {}) });
+    else await cmd.writeLn(`${index.size} commands, ${embedded} embedded${error ? ` (last embedding failed: ${error})` : ''}`);
+    return 0;
+  }
+  await cmd.writeError(usage);
+  return 1;
+};
+
+assistantCommands.spec = {
+  name: 'assistant-commands',
+  effect: 'read' as const,
+  description: "Find a command by what it is for, judge whether a line changes anything, or rebuild the assistant's command index",
+  args: [
+    { name: 'action', type: 'string' as const, description: 'find, judge or reindex', writes: ['reindex'] },
+    { name: 'text', type: 'string' as const, description: 'find: what the command should do; judge: the shell line', variadic: true },
+  ],
+  flags: [
+    { name: 'limit', type: 'number' as const, description: `find: how many commands (default ${DEFAULT_HITS})` },
+  ],
+  examples: [
+    "assistant-commands find 'list running services'",
+    "assistant-commands judge 'service restart pipeline-pruner'",
+  ],
+  returns: 'find: the best commands with name, description, effect and score; judge: read or write with the reasons; reindex: how many commands were indexed.',
+};
+
+export default assistantCommands;

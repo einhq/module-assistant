@@ -1,0 +1,309 @@
+#!ts
+/**
+ * agent-eval — run the chat's loop on questions with known answers, against the real archive.
+ *
+ * WHY LIVE. A canned result that does not look like what `--help` promised makes a model distrust
+ * it and search again. Run for real, every result is right by construction, and what is measured
+ * is whether the model can drive the archive.
+ *
+ * WHAT IT DOES. Each question goes through the drawer's own loop (`@assistant/agent`): the same
+ * commands as tools, the same prompt, the same model service (`lib/llm.ts`). The questions are the
+ * modules' own (each drop-in's `eval.json`), since each knows what its part should answer. Then
+ * it scores what can be scored without a human: did it reach the command the fixture expects, did its lines
+ * run, did the reply stay in the user's language. What is measured is what a user gets.
+ *
+ * HOW A MODEL IS TRIED. The prompts, the fast path and these questions are tuned for the models in
+ * `TRIED_MODELS` (`lib/llm.ts`), and `health` warns of any other. A run names the model that answered
+ * it (`model`); one whose run does the job is added there.
+ *
+ * NOTHING IS CHANGED. A line that only reads runs; one that would write is recorded as a proposal
+ * and answered as the drawer answers one — which is also what the deployed assistant does, so the
+ * model sees what it would see in production.
+ *
+ * Run in the EiN shell of a deployment: `agent-eval --limit 5`.
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import type { AssistantContext } from '../lib/api.ts';
+import { commandsIn, parseArgs, shq } from '@ein/client';
+import { chat } from '../lib/llm.ts';
+import { ask, COMMAND_HELP, FIND_COMMANDS, loadSurface, readPrompt, RUN_COMMAND, TABLE_STEP } from '../lib/agent.ts';
+import { dropInModules, offeredTools, readDropIn } from '../lib/drop-ins.ts';
+import { COMMANDS_PROMPT_PATH, commandsSystem } from '../lib/prompt-native.ts';
+
+/** One question, and the commands that do its job: reaching any of them counts, none means none is needed. */
+type Question = {
+  id: string;
+  bucket: string;
+  lang: 'sv' | 'en';
+  ask: string;
+  /** What the app shows as it is asked: a page, a picture open in the lightbox. */
+  context?: AssistantContext;
+  commands: string[];
+};
+
+/** A file of questions; `resolvers` turn a name into a path, so calling one first is not a wrong first choice. */
+type Questions = { resolvers?: string[]; questions: Question[] };
+
+/** The questions: those of the file `--fixtures` names, or every module's (its drop-in's `eval.json`). */
+const readQuestions = async (cmd: Command, path: string | undefined): Promise<Questions | string> => {
+  const texts: string[] = [];
+  if (path) {
+    const ran = await cmd.execute(`cat ${shq(path)}`);
+    if (ran.code !== 0) return `cannot read ${path}`;
+    texts.push(`${ran.stdout}`);
+  } else {
+    for (const module of await dropInModules(cmd)) {
+      const text = await readDropIn(cmd, module, 'eval.json');
+      if (text !== undefined) texts.push(text);
+    }
+  }
+  const all: Questions = { resolvers: [], questions: [] };
+  for (const text of texts) {
+    try {
+      const file = JSON.parse(text) as Questions;
+      all.resolvers!.push(...file.resolvers ?? []);
+      all.questions.push(...file.questions ?? []);
+    } catch {
+      return `a file of questions is not JSON`;
+    }
+  }
+  return all;
+};
+
+/** How long a run waits for a model that went away — restarting on another share of the card — before it gives a question up. */
+const MODEL_BACK_MS = 10 * 60_000;
+
+/** Whether the model answers again within MODEL_BACK_MS, asked every 15 seconds. */
+const modelBack = async (cmd: Command): Promise<boolean> => {
+  const until = Date.now() + MODEL_BACK_MS;
+  while (Date.now() < until && !cmd.interrupted) {
+    try {
+      await chat(cmd, [{ role: 'user', content: 'ok' }], { maxTokens: 1, timeoutSeconds: 30 });
+      return true;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 15_000));
+    }
+  }
+  return false;
+};
+
+// Swedish by its words, not its letters: an English reply names Swedish people, locations and albums.
+const SWEDISH_WORDS = /(?<![\p{L}_])(och|att|från|bilder|foto|foton|här|är|som|inte|det|den|för|med|på|född|heter|syster|bror|mamma|pappa|gånger|vi|jag|du|har)(?![\p{L}_])/iu;
+const isSwedish = (text: string) => SWEDISH_WORDS.test(text);
+
+const summarize = (model: string, results: Record<string, unknown>[]) => ({
+  model,
+  fixtures: results.length,
+  // Only questions that need a command can reach one: a greeting or "17 × 24" is answered well by answering.
+  needCommand: results.filter((r) => (r.expected as string[]).length > 0).length,
+  reached: results.filter((r) => r.reached).length,
+  firstChoice: results.filter((r) => r.first && (r.expected as string[]).includes(r.first as string)).length,
+  noToolAnswered:
+    results.filter((r) => (r.expected as string[]).length === 0 && r.answered && !(r.turns as Record<string, unknown>[]).some((t) => t.verdict === 'ran')).length,
+  answered: results.filter((r) => r.answered).length,
+  language: results.filter((r) => r.languageOk).length,
+  commandsRun: results.reduce((n, r) => n + (r.turns as Record<string, unknown>[]).filter((t) => t.verdict === 'ran').length, 0),
+  commandsFailed: results.reduce((n, r) => n + (r.turns as Record<string, unknown>[]).filter((t) => t.verdict === 'failed').length, 0),
+  proposals: results.reduce((n, r) => n + (r.turns as Record<string, unknown>[]).filter((t) => t.verdict === 'proposed').length, 0),
+  msPerFixture: Math.round(results.reduce((n, r) => n + (r.ms as number), 0) / Math.max(results.length, 1)),
+  // Where the time goes, and what thinking costs: model time, calls, tokens written, thought length.
+  modelMsPerFixture: Math.round(results.reduce((n, r) => n + ((r.timing as { model?: number } | undefined)?.model ?? 0), 0) / Math.max(results.length, 1)),
+  modelCalls: results.reduce((n, r) => n + ((r.timing as { modelCalls?: number } | undefined)?.modelCalls ?? 0), 0),
+  tokensGenerated: results.reduce((n, r) => n + ((r.tokens as { generated?: number } | undefined)?.generated ?? 0), 0),
+  callsTruncated: results.reduce((n, r) => n + ((r.tokens as { truncated?: number } | undefined)?.truncated ?? 0), 0),
+  thoughtChars: results.reduce((n, r) => n + (r.thoughtChars as number), 0),
+});
+
+/**
+ * Write what has been measured so far, after every question.
+ *
+ * A full run is most of an hour, and a dropped ssh session leaves the command running inside EiN
+ * with nowhere to print. A file written as it goes survives that, and `nohup agent-eval --out …`
+ * survives the session itself.
+ */
+const writeOut = async (cmd: Command, path: string, model: string, results: Record<string, unknown>[], done: boolean) => {
+  const body = new TextEncoder().encode(JSON.stringify({ done, summary: summarize(model, results), results }, null, 1));
+  try {
+    await cmd.sys.vfs.get(cmd.access, path);
+  } catch {
+    await cmd.execute(`mkfile ${path}`);
+  }
+  const handle = await cmd.sys.vfs.open(cmd.access, path, { mode: 'w' });
+  try {
+    await handle.write(body);
+  } finally {
+    await handle.close();
+  }
+};
+
+export const agentEval = async (cmd: Command): CmdReturn => {
+  const flags = parseArgs(cmd.args, {
+    string: ['fixtures', 'bucket', 'ids', 'out', 'user', 'prompt'],
+    boolean: ['verbose', 'print-prompt'],
+  });
+  const limit = Number(flags.limit ?? 0);
+
+  // Every command's `--help` spec, once for the run; each question gets the same tools, so the
+  // shared start of the prompt is the same too.
+  const surface = await loadSurface(cmd);
+  for (const name of await offeredTools(cmd)) {
+    if (!surface.specs.has(name)) await cmd.writeError(`agent-eval: ${name} did not describe itself; it is offered by nothing\n`);
+  }
+
+  const file = await readQuestions(cmd, typeof flags.fixtures === 'string' ? flags.fixtures : undefined);
+  if (typeof file === 'string') {
+    await cmd.writeError(`agent-eval: ${file}\n`);
+    return 1;
+  }
+  const resolvers = new Set(file.resolvers ?? []);
+  let fixtures = file.questions;
+  if (flags.bucket) fixtures = fixtures.filter((f) => f.bucket === flags.bucket);
+  if (flags.ids) {
+    const ids = new Set(String(flags.ids).split(','));
+    fixtures = fixtures.filter((f) => ids.has(f.id));
+  }
+  if (limit > 0) fixtures = fixtures.slice(0, limit);
+
+  // `--user` asks as someone else; by default the loop asks as the account's own person, as the
+  // drawer does. An account with no person behind it cannot resolve "min moster".
+  let user: { name: string; path: string } | null | undefined;
+  if (typeof flags.user === 'string' && flags.user) {
+    const path = flags.user.replace(/\/+$/, '');
+    let name: unknown;
+    try {
+      name = (await cmd.sys.vfs.get(cmd.access, path)).attrs.name;
+    } catch {
+      await cmd.writeError(`agent-eval: --user: no person at ${path}\n`);
+      return 1;
+    }
+    user = { name: typeof name === 'string' && name ? name : path.split('/').pop()!, path };
+  }
+  const promptPath = typeof flags.prompt === 'string' ? flags.prompt : COMMANDS_PROMPT_PATH;
+
+  if (flags['print-prompt']) {
+    const system = commandsSystem((await readPrompt(cmd, promptPath)) ?? '', { user: user ?? undefined });
+    await cmd.writeLn(`${system}\n\n--- tools (${surface.tools.length}) ---\n${JSON.stringify(surface.tools, null, 2)}`);
+    return 0;
+  }
+
+  // Load the model before the clock starts: a cold model takes minutes, which the first questions would be scored as.
+  // Its answer names the model the server runs, which is what the run measures.
+  let model: string;
+  try {
+    ({ model } = await chat(cmd, [{ role: 'user', content: 'ok' }], { maxTokens: 1, timeoutSeconds: 600 }));
+  } catch (error) {
+    await cmd.writeError(`agent-eval: warm-up: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  const results: Record<string, unknown>[] = [];
+  for (const fixture of fixtures) {
+    // Stopped means stopped: a killed run asks no more questions.
+    if (cmd.interrupted) {
+      await cmd.writeError(`agent-eval: stopped after ${results.length} questions\n`);
+      return 130;
+    }
+    const wanted = new Set(fixture.commands);
+    const asked = fixture.ask;
+    let started = Date.now();
+    const askIt = () =>
+      ask(cmd, {
+        message: asked,
+        sentAt: new Date(),
+        earlier: [],
+        context: fixture.context ?? {},
+        ...(user !== undefined ? { user } : {}),
+        promptPath,
+        noFast: true,
+      }, surface);
+    let reply = await askIt();
+    // A model that went away — restarting on another share of the card — is waited for and asked
+    // again, rather than every question after it scored as unanswered.
+    const waited = reply.failure === 'unavailable' && await modelBack(cmd);
+    if (waited) {
+      started = Date.now();
+      reply = await askIt();
+    }
+
+    // A run_command or table step is the commands its line runs; the lookups of commands reach nothing.
+    const commands: string[] = [];
+    for (const step of reply.steps.filter((step) => step.verdict !== 'repeated' && step.verdict !== 'unknown')) {
+      if (step.tool === RUN_COMMAND.name || step.tool === TABLE_STEP) commands.push(...await commandsIn(step.line ?? ''));
+      else if (step.tool !== FIND_COMMANDS.name && step.tool !== COMMAND_HELP.name) commands.push(step.tool);
+    }
+    const first = commands.find((name) => !resolvers.has(name) || wanted.has(name));
+    const reached = commands.some((name) => wanted.has(name));
+    const answer = reply.error ? '' : reply.answer;
+    // A proposal ends the turn with the drawer's fixed line; its language is the app's, not the model's.
+    const languageOk = reply.proposal ? true : answer !== '' && (fixture.lang === 'sv') === isSwedish(answer);
+    results.push({
+      id: fixture.id,
+      bucket: fixture.bucket,
+      asked,
+      expected: [...wanted],
+      first,
+      reached,
+      answered: Boolean(answer),
+      answer,
+      languageOk,
+      // A wait for the model to come back is the model's restart, not the question's time.
+      ms: Date.now() - started - (reply.timing?.away ?? 0),
+      ...(waited ? { waitedForModel: true } : {}),
+      ...(reply.timing ? { timing: reply.timing } : {}),
+      ...(reply.tokens ? { tokens: reply.tokens } : {}),
+      ...(reply.table ? { table: { line: reply.table.line, rows: reply.table.rows.length + (reply.table.more ?? 0) } } : {}),
+      thoughtChars: (reply.timeline ?? []).reduce((n, event) => n + (event.kind === 'thinking' ? event.text.length : 0), 0),
+      turns: reply.steps.map((step) => ({
+        name: step.tool,
+        line: step.line,
+        args: step.line ? undefined : step.args,
+        code: step.code,
+        bytes: step.bytes,
+        verdict: step.verdict,
+      })),
+      ...(reply.error ? { error: reply.error } : {}),
+      ...(reply.cache ? { cache: reply.cache } : {}),
+      // The conversation exactly as the model was sent it, to replay against the model service.
+      messages: reply.transcript,
+    });
+    if (flags.out) await writeOut(cmd, String(flags.out), model, results, false);
+    if (flags.verbose) await cmd.writeLn(`${fixture.id}: ${reached ? 'reached' : 'missed'} ${[...wanted].join('|')} via ${first ?? '-'}${answer ? '' : ', no answer'}`);
+  }
+
+  const summary = summarize(model, results);
+  if (flags.out) await writeOut(cmd, String(flags.out), model, results, true);
+  if (cmd.json) {
+    await cmd.writeJSON({ summary, results });
+  } else {
+    await cmd.writeLn(JSON.stringify(summary, null, 2));
+  }
+  return 0;
+};
+
+agentEval.spec = {
+  name: 'agent-eval',
+  effect: 'read' as const,
+  description: "Ask the chat's loop the modules' questions against the real archive, and score what happens",
+  args: [],
+  flags: [
+    { name: 'fixtures', type: 'path' as const, description: "a file of questions to ask (default: every module's, in its drop-in's eval.json)" },
+    { name: 'bucket', type: 'string' as const, description: 'only questions from this bucket' },
+    { name: 'ids', type: 'string' as const, description: 'only these questions, by id, comma-separated' },
+    { name: 'limit', type: 'number' as const, description: 'stop after this many questions' },
+    { name: 'verbose', type: 'bool' as const, description: 'a line per question as it finishes' },
+    { name: 'prompt', type: 'path' as const, description: `the prompt file to use (default ${COMMANDS_PROMPT_PATH})` },
+    { name: 'print-prompt', type: 'bool' as const, description: 'print the system prompt and the tool schemas the model is given, and stop' },
+    { name: 'user', type: 'path' as const, description: 'the person to ask as, by path (default: the person linked to the account running it)' },
+    { name: 'out', writes: true, type: 'path' as const, description: 'write the results here after every question, so a dropped session loses nothing' },
+  ],
+  examples: [
+    'agent-eval --limit 5 --verbose',
+    'agent-eval --bucket kin',
+    'nohup agent-eval --user /archive/people/Anna_Exempel --out /tmp/agent-eval.json',
+  ],
+  returns:
+    'a summary — the model that answered, how often the right command was reached, how many lines ran, how many questions were answered — and the turns of each question.',
+};
+
+export default agentEval;

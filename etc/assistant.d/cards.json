@@ -1,0 +1,53 @@
+[
+  {
+    "name": "chart",
+    "route": "/chart",
+    "description": "A chart under the answer, only when the user asks for a chart, graph or diagram. A log (a weight, a measurement): give its path as source and no points; the app reads and plots every entry itself, so do not cat it first and do not copy its values. Otherwise points, at most 60: numbers you counted from the results, or ones you worked out yourself, such as counts in a text the user gave.",
+    "params": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "line",
+            "bar",
+            "pie"
+          ],
+          "description": "line for a value over time, bar to compare, pie for parts of one whole."
+        },
+        "title": {
+          "type": "string",
+          "description": "A short title, in the language of the reply."
+        },
+        "unit": {
+          "type": "string",
+          "description": "What the values are in: \"kg\", \"bilder\". A log's own unit is used when left out."
+        },
+        "source": {
+          "type": "string",
+          "format": "path",
+          "description": "The path of a log to plot, every entry by its date."
+        },
+        "points": {
+          "type": "array",
+          "description": "The values, in order, when there is no source.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "value": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "label",
+              "value"
+            ]
+          }
+        }
+      }
+    }
+  }
+]
