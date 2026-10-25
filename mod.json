@@ -2,7 +2,7 @@
   "name": "assistant",
   "version": "0.1.0",
   "description": "Assistant: answers questions by running EiN's commands for the user, with what the installed modules offer it",
-  "coreApi": "^0.2.0",
+  "coreApi": "^0.3.0",
   "imports": {
     "@assistant/agent": "./lib/agent.ts",
     "@assistant/answer-links": "./lib/answer-links.ts",
