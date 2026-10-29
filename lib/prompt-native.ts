@@ -8,12 +8,23 @@
 
 import type { AssistantContext } from './api.ts';
 
-/** Who is asking, when the account is linked to a person, and where their files go. */
+/** Who is asking, when the account is linked to a person, where their files go, and the system's language. */
 type Asker = {
   /** The person the account is linked to: their name and node. */
   user?: { name: string; path: string };
   /** The user's home directory, where a file they ask for with no path goes. */
   home?: string;
+  /** The system's language (`CFG_LANGUAGE`, a BCP 47 tag): what a message too short to tell is answered in. */
+  language?: string;
+};
+
+/** A language tag in English words, `sv` as "Swedish"; the tag itself when it names none. */
+const languageName = (tag: string): string => {
+  try {
+    return new Intl.DisplayNames('en', { type: 'language' }).of(tag) ?? tag;
+  } catch {
+    return tag;
+  }
 };
 
 /** Where the prompt file is installed. */
@@ -42,6 +53,10 @@ export const commandsSystem = (prompt: string, context: Asker): string => {
     );
   } else lines.push('The user is not linked to a person: "I" and "we" cannot be resolved; say so if it matters.');
   if (context.home) lines.push(`The user's home directory is ${context.home}; a file they name with no path goes there.`);
+  const language = languageName(context.language?.trim() || 'en');
+  lines.push(
+    `The system's language is ${language}. Reply in the language of the user's message, whatever language the archive and the commands' output are in; only a message too short to tell, such as a name or "ok", gets ${language}.`,
+  );
   return `${prompt.trim()}\n\nCONTEXT:\n${lines.join('\n')}`;
 };
 

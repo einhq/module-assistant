@@ -763,7 +763,7 @@ export const ask = async (cmd: Command, options: AgentOptions, surface?: Surface
   if (!prompt) return failed(`no prompt at ${options.promptPath ?? COMMANDS_PROMPT_PATH}`, 'unavailable');
   const { specs, tools, cards } = surface ?? await loadSurface(cmd);
   const home = typeof cmd.env.HOME === 'string' && cmd.env.HOME !== '/' ? cmd.env.HOME.replace(/\/$/, '') : undefined;
-  const system: LlmMessage = { role: 'system', content: commandsSystem(prompt, { user, home }) };
+  const system: LlmMessage = { role: 'system', content: commandsSystem(prompt, { user, home, language: cmd.env.CFG_LANGUAGE }) };
   modelContext = { checksum: await checksumOf(system.content, tools), system: system.content, tools };
   timing.setup = Date.now() - startedAt;
 

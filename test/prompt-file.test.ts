@@ -18,6 +18,11 @@ Deno.test('the per-request context follows the prompt text, which is unchanged',
   assert(!/\d{4}-\d{2}-\d{2}/.test(system.slice(shipped.trim().length)), 'no date in the system message');
 });
 
+Deno.test("the context names the system's language, English when none is set", () => {
+  assert(commandsSystem(shipped, { language: 'sv' }).includes("The system's language is Swedish."));
+  assert(commandsSystem(shipped, {}).includes("The system's language is English."));
+});
+
 Deno.test('a user message carries its own time and what the app showed', () => {
   const at = new Date(2026, 0, 6, 9, 5);
   assertEquals(stampedMessage('hej', at), '[Tue 2026-01-06 09:05] hej');

@@ -26,7 +26,8 @@ chats are a bordered box in the page's margin (`ChatHistoryPane`), as Settings' 
 phone has no room for it, so its bar adds a menu of the chats instead. On a
 phone the input, its think and send buttons and the bar's buttons are finger-sized, as the app
 header's are. The drawer's own words are English; the
-conversation is in whatever language the user writes.
+conversation is in whatever language the user writes. The system text names the system's language
+(`CFG_LANGUAGE`), which only a message too short to tell is answered in.
 
 Behind it is a bounded loop over the chat model, Qwen3.5-4B
 (`modules/assistant/lib/agent.ts`), which knows no module: what it offers and says comes from the
