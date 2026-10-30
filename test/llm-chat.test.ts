@@ -40,6 +40,16 @@ Deno.test({ name: 'llm-chat', sanitizeResources: false, sanitizeOps: false }, as
       assertEquals(`${(await client.exec(`JSON_OUTPUT=0 CFG_LLM_URL=${model.url} llm-chat hej`)).data}`.trim(), 'Oslo.');
     });
 
+    await t.step('without --think, CFG_LLM_THINKING decides; with it, the model thinks', async () => {
+      const kwargs = () => (model.requests.at(-1) as { chat_template_kwargs?: unknown }).chat_template_kwargs;
+      await client.execJson(`CFG_LLM_URL=${model.url} llm-chat hej`);
+      assertEquals(kwargs(), undefined);
+      await client.execJson(`CFG_LLM_THINKING=1 CFG_LLM_URL=${model.url} llm-chat hej`);
+      assertEquals(kwargs(), { enable_thinking: true });
+      await client.execJson(`CFG_LLM_THINKING=0 CFG_LLM_URL=${model.url} llm-chat --think hej`);
+      assertEquals(kwargs(), { enable_thinking: true });
+    });
+
     await t.step('a model that does not answer is a failure, for the caller to fall back from', async () => {
       await cmd.shouldFailWith('CFG_LLM_URL=http://127.0.0.1:1 llm-chat hej', 'llm-chat:');
       await cmd.shouldFailWith(`CFG_LLM_URL=${model.url} llm-chat --history '{}' hej`, '--history');

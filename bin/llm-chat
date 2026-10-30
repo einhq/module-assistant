@@ -45,7 +45,7 @@ const llmChat = async (cmd: Command): CmdReturn => {
     const reply = await chat(cmd, [...(flags.system ? [{ role: 'system' as const, content: flags.system }] : []), ...history, { role: 'user', content: message }], {
       ...(Number.isFinite(maxTokens) && maxTokens > 0 ? { maxTokens } : {}),
       ...(Number.isFinite(timeout) && timeout > 0 ? { timeoutSeconds: timeout } : {}),
-      thinking: flags.think === true,
+      ...(flags.think === true ? { thinking: true } : {}),
     });
     if (cmd.json) await cmd.writeJSON({ content: reply.content, model: reply.model } satisfies LanguageModelReply);
     else await cmd.writeLn(reply.content);
@@ -68,7 +68,7 @@ llmChat.spec = {
     { name: 'history', type: 'string' as const, description: 'earlier turns, as JSON: [{"role":"user"|"assistant","content":"…"}]' },
     { name: 'max-tokens', type: 'number' as const, description: 'the most the answer may be (default 768)' },
     { name: 'timeout', type: 'number' as const, description: 'seconds to wait for the answer (default 180)' },
-    { name: 'think', type: 'bool' as const, description: 'let the model think before it answers' },
+    { name: 'think', type: 'bool' as const, description: 'let the model think before it answers (without it, CFG_LLM_THINKING decides)' },
   ],
   examples: ["llm-chat 'Vad är huvudstaden i Norge?'", "llm-chat --system 'Answer in one word.' 'The colour of the sky?'"],
   returns: 'content, the answer, and model, the model that wrote it.',
