@@ -30,7 +30,7 @@ import type { AssistantReply } from '@assistant/reply';
 import type { AssistantContext } from '@assistant/api';
 import { stampedMessage } from '@assistant/prompt-native';
 import { ASSISTANT_PROGRESS_ID, beginAssistantProgress, finishAssistantProgress, setAssistantDraft, setAssistantProgress, setAssistantTimeline } from '@assistant/progress';
-import { appendChatMessage, readChat, readModelContext, type StoredChatMessage, writeModelContext } from '@assistant/chat-store';
+import { appendChatMessage, declinedSinceAsked, readChat, readModelContext, type StoredChatMessage, writeModelContext } from '@assistant/chat-store';
 import { mayUseModel } from '@assistant/llm';
 
 /** An earlier turn a client without a chat log sends along (`--history`). */
@@ -170,7 +170,7 @@ const assistantAsk = async (cmd: Command): CmdReturn => {
       context,
       maxSteps,
       ...(flags.think ? { think: true } : {}),
-      ...(resume ? { resume } : {}),
+      ...(resume ? { resume, declined: declinedSinceAsked(stored!) } : {}),
       ...watched,
     });
   } finally {

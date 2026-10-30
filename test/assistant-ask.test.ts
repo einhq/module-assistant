@@ -534,12 +534,39 @@ Deno.test({
       assertEquals(stored.at(-1)!.content, 'Mappen finns nu.');
     });
 
+    await t.step("agent-eval --print-prompt prints the system message a turn sends: the asker's home and the system's language too", async () => {
+      const printed = `${(await client.exec('JSON_OUTPUT=0 CFG_LANGUAGE=sv agent-eval --print-prompt')).data}`;
+      const { asked } = await askWith(() => tool('final_answer', { answer: 'Hej.' }), shq('hej'), 'CFG_LANGUAGE=sv ');
+      const sent = asked[0].messages[0].content!;
+      assertStringIncludes(sent, "The user's home directory is /home/admin");
+      assertStringIncludes(sent, "The system's language is Swedish.");
+      assertEquals(printed.split('\n\n--- tools')[0], sent);
+    });
+
     await t.step('a declined proposal is told to the model as declined', async () => {
       const chat = (await client.execJson<{ chat: { id: string } }>('assistant-chat create')).chat.id;
       const first = await askWith(() => tool('run_command', { command: 'rm /home/admin/exempel' }), `--chat ${chat} ${shq('ta bort mappen')}`);
       await cmd.shouldSucceed(`assistant-chat outcome ${chat} ${first.reply.messageId} dismissed`);
       const { asked } = await askWith(() => tool('final_answer', { answer: 'Då låter jag den vara.' }), `--chat ${chat} --resume`);
       assertStringIncludes(asked[0].messages.at(-1)!.content!, 'Declined by the user, not run');
+    });
+
+    await t.step('a declined change proposed again in the turn that goes on is not shown; a new message may ask for it', async () => {
+      const chat = (await client.execJson<{ chat: { id: string } }>('assistant-chat create')).chat.id;
+      const removing: Script = () => tool('run_command', { command: 'rm /home/admin/exempel' });
+      const first = await askWith(removing, `--chat ${chat} ${shq('ta bort mappen')}`);
+      await cmd.shouldSucceed(`assistant-chat outcome ${chat} ${first.reply.messageId} dismissed`);
+
+      const insisting: Script = (last) =>
+        last.role === 'tool' ? tool('final_answer', { answer: 'Då låter jag den vara.' }) : tool('run_command', { command: "rm '/home/admin/exempel'" });
+      const again = await askWith(insisting, `--chat ${chat} --resume`);
+      assertEquals(again.reply.proposal, undefined);
+      assertStringIncludes(again.asked[1].messages.at(-1)!.content!, 'the user declined this change');
+      const shown = again.reply.timeline?.find((event) => event.kind === 'command') as { failed?: boolean; output?: string } | undefined;
+      assertStringIncludes(shown?.output ?? '', 'the user declined this change');
+
+      const asked = await askWith(removing, `--chat ${chat} ${shq('ta bort den ändå')}`);
+      assertEquals(asked.reply.proposal?.commands[0].command, 'rm /home/admin/exempel');
     });
 
     await t.step('a reading command given a flag that writes is proposed, and what may not run is refused', async () => {
@@ -556,6 +583,11 @@ Deno.test({
       const touched = await askWith(touching, shq('skapa filen test.txt'));
       assertEquals(touched.reply.proposal, undefined);
       assertStringIncludes(touched.asked[1].messages.at(-1)!.content!, 'touch is not an EiN command');
+      // The person reads why on the refused line, without the hint meant for the model.
+      const shown = touched.reply.timeline?.find((event) => event.kind === 'command') as { failed?: boolean; output?: string } | undefined;
+      assertEquals(shown?.failed, true);
+      assertStringIncludes(shown?.output ?? '', 'touch is not an EiN command');
+      assertEquals(shown?.output?.includes('find_commands'), false);
 
       // An unquoted & in a path backgrounds half the line; the model hears to quote it, nothing is proposed.
       const looping: Script = (last) =>

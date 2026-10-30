@@ -105,6 +105,8 @@ const SLOW_SPENT = 'No more commands run for this question: they took too long. 
  * calls the same command again, and the same words as a user message stop it.
  */
 const ANSWER_FROM_ABOVE = 'You have that result above already. Answer now with final_answer, from what the results above say.';
+/** Told to the model, and shown, for a change the user has just declined proposed again. */
+const DECLINED_AGAIN = 'the user declined this change; it is not shown again. Answer without it, or propose something else';
 /** Said after a thought that filled the call's token limit, for a call made without thinking. */
 const THOUGHT_SPENT = 'Your thinking used up the room for this step. Answer now with final_answer, from what the results above say.';
 const STILL_REPEATING = 'the model kept repeating the same command';
@@ -140,6 +142,11 @@ export type AgentOptions = {
    * then the question the turn began with, and is not sent again.
    */
   resume?: boolean;
+  /**
+   * Lines the user declined and has not written since: proposed again, they are not shown, and the
+   * model hears they were declined. A new message may ask for one after all, so it passes none.
+   */
+  declined?: string[];
 };
 
 /** A step with what `agent-eval` needs besides the drawer's trail. */
@@ -508,6 +515,19 @@ const whoami = async (cmd: Command, seen: Seen): Promise<{ name: string; path: s
   return { name, path };
 };
 
+/** Who asks: the person `user` names, the account's own when it is undefined, nobody when it is null. */
+export const askerOf = async (cmd: Command, user: AgentOptions['user'], seen: Seen = emptySeen()): Promise<{ name: string; path: string } | undefined> => {
+  if (user === undefined) return await whoami(cmd, seen);
+  if (user) seen.named.set(user.path, user.name);
+  return user ?? undefined;
+};
+
+/** The system message a turn sends: the prompt, then who asks, where their files go, and the system's language. */
+export const systemFor = (cmd: Command, prompt: string, user: { name: string; path: string } | undefined): string => {
+  const home = typeof cmd.env.HOME === 'string' && cmd.env.HOME !== '/' ? cmd.env.HOME.replace(/\/$/, '') : undefined;
+  return commandsSystem(prompt, { user, home, language: cmd.env.CFG_LANGUAGE });
+};
+
 /** A checksum of what the model reads before the conversation, to tell when it has changed. */
 const checksumOf = async (system: string, tools: unknown[]): Promise<string> => {
   const bytes = new TextEncoder().encode(JSON.stringify({ system, tools }));
@@ -593,23 +613,31 @@ const COMMAND_CHARS = 2000;
 /** What `command_help` shows of a spec: what a call needs. */
 const helpView = ({ json: _json, group: _group, daemon: _daemon, ...spec }: CmdSpec) => spec;
 
+/** Why a line was refused: `reason` for the person and the model alike, `next` for the model alone. */
+type Refusal = { reason: string; next?: string };
+
+/** A refusal as the model hears it. */
+const toModel = (refused: Refusal): string => refused.next ? `${refused.reason}. ${refused.next}` : refused.reason;
+
 /**
  * Why a line may not run from the chat at all, confirmed or not; nothing when it may. A command the
  * shell does not have is refused with similar ones it does, rather than proposed to fail on the card
  * after the user pressed Run.
  */
-const refusal = async (cmd: Command, line: string): Promise<string | undefined> => {
+const refusal = async (cmd: Command, line: string): Promise<Refusal | undefined> => {
   const ampersand = ampersandInPath(line);
-  if (ampersand) return ampersand;
+  if (ampersand) return { reason: ampersand };
   for (const name of await commandsIn(line)) {
     const spec = await indexedSpec(cmd, name);
     // `type` knows the shell's builtins (echo, printf, test …) that no PATH directory lists.
     if (!spec && !/[$`]/.test(name) && (await cmd.execute(`type ${shq(name)}`)).code !== 0) {
       const similar = (await findCommands(cmd, name.replace(/-/g, ' '), 5)).map((hit) => hit.name);
-      return `${name} is not an EiN command${similar.length ? `; there is ${similar.join(', ')}` : ''}. find_commands finds one by what it should do`;
+      return { reason: `${name} is not an EiN command${similar.length ? `; there is ${similar.join(', ')}` : ''}`, next: 'find_commands finds one by what it should do' };
     }
     if (spec && unavailable(spec)) {
-      return `${name} cannot be run from the chat: ${spec.daemon ? 'it is a service, started with service-start' : 'it needs a terminal or is the assistant itself'}`;
+      return {
+        reason: `${name} cannot be run from the chat: ${spec.daemon ? 'it is a service, started with service-start' : 'it needs a terminal or is the assistant itself'}`,
+      };
     }
   }
   return undefined;
@@ -678,6 +706,7 @@ export const ask = async (cmd: Command, options: AgentOptions, surface?: Surface
   const startedAt = Date.now();
   const maxSteps = Math.max(1, options.maxSteps ?? DEFAULT_MAX_STEPS);
   const seen = emptySeen();
+  const declined = new Set((options.declined ?? []).map(sameLine));
   for (const path of options.context.shown ?? []) seen.shown.add(path);
   const steps: AgentStep[] = [];
   const timeline: AssistantEvent[] = [];
@@ -730,8 +759,7 @@ export const ask = async (cmd: Command, options: AgentOptions, surface?: Surface
   });
   const failed = (reason: string, failure: AssistantFailure = 'no-answer') => reply({ answer: FAILURE_ANSWERS[failure], error: reason, failure });
 
-  const user = options.user === undefined ? await whoami(cmd, seen) : options.user ?? undefined;
-  if (options.user) seen.named.set(options.user.path, options.user.name);
+  const user = await askerOf(cmd, options.user, seen);
 
   /**
    * A link to a node the asker can see, with the type the chat opens it by. A label that is only
@@ -762,8 +790,7 @@ export const ask = async (cmd: Command, options: AgentOptions, surface?: Surface
   const prompt = await readPrompt(cmd, options.promptPath ?? COMMANDS_PROMPT_PATH);
   if (!prompt) return failed(`no prompt at ${options.promptPath ?? COMMANDS_PROMPT_PATH}`, 'unavailable');
   const { specs, tools, cards } = surface ?? await loadSurface(cmd);
-  const home = typeof cmd.env.HOME === 'string' && cmd.env.HOME !== '/' ? cmd.env.HOME.replace(/\/$/, '') : undefined;
-  const system: LlmMessage = { role: 'system', content: commandsSystem(prompt, { user, home, language: cmd.env.CFG_LANGUAGE }) };
+  const system: LlmMessage = { role: 'system', content: systemFor(cmd, prompt, user) };
   modelContext = { checksum: await checksumOf(system.content, tools), system: system.content, tools };
   timing.setup = Date.now() - startedAt;
 
@@ -815,7 +842,7 @@ export const ask = async (cmd: Command, options: AgentOptions, surface?: Surface
     let output = printedBy.get(sameLine(line));
     if (output === undefined) {
       const refused = await refusal(cmd, line);
-      if (refused) return refused;
+      if (refused) return toModel(refused);
       if ((await judgeLine(line, (name) => specs.get(name) ?? indexedSpec(cmd, name))).effect === 'write') {
         return `${line} changes something; a table shows a line that only reads`;
       }
@@ -1047,6 +1074,11 @@ export const ask = async (cmd: Command, options: AgentOptions, surface?: Surface
         turn.push(result(parsed!.id, { error: GUEST_WRITES }));
         return undefined;
       }
+      if (declined.has(sameLine(line))) {
+        record({ tool: parsed!.name, args: parsed!.args, summary: `${line} — refused`, line, verdict: 'failed' }, DECLINED_AGAIN);
+        turn.push(result(parsed!.id, { error: DECLINED_AGAIN }));
+        return undefined;
+      }
       record({ tool: parsed!.name, args: parsed!.args, summary: line, line, verdict: 'proposed', ms: 0 });
       turn.push(result(parsed!.id, { proposed: line, note: 'shown to the user to run or decline; not run yet' }));
       // The nodes it changes that a result named, as links; one it would make is not there yet.
@@ -1162,8 +1194,8 @@ export const ask = async (cmd: Command, options: AgentOptions, surface?: Surface
       const judgement = await judgeLine(line, (name) => indexedSpec(cmd, name));
       const refused = await refusal(cmd, line);
       if (refused) {
-        record({ tool: parsed.name, args: parsed.args, summary: `${line} — refused`, line, verdict: 'failed' });
-        turn.push(result(parsed.id, { error: refused }));
+        record({ tool: parsed.name, args: parsed.args, summary: `${line} — refused`, line, verdict: 'failed' }, refused.reason);
+        turn.push(result(parsed.id, { error: toModel(refused) }));
         if (++malformed > RETRIES) return failed('the model kept running commands the assistant may not');
         continue;
       }

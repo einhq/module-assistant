@@ -27,9 +27,9 @@ import type { CmdReturn, Command } from '@ein/client';
 import type { AssistantContext } from '../lib/api.ts';
 import { commandsIn, parseArgs, shq } from '@ein/client';
 import { chat } from '../lib/llm.ts';
-import { ask, COMMAND_HELP, FIND_COMMANDS, loadSurface, readPrompt, RUN_COMMAND, TABLE_STEP } from '../lib/agent.ts';
+import { ask, askerOf, COMMAND_HELP, FIND_COMMANDS, loadSurface, readPrompt, RUN_COMMAND, systemFor, TABLE_STEP } from '../lib/agent.ts';
 import { dropInModules, offeredTools, readDropIn } from '../lib/drop-ins.ts';
-import { COMMANDS_PROMPT_PATH, commandsSystem } from '../lib/prompt-native.ts';
+import { COMMANDS_PROMPT_PATH } from '../lib/prompt-native.ts';
 
 /** One question, and the commands that do its job: reaching any of them counts, none means none is needed. */
 type Question = {
@@ -151,20 +151,6 @@ export const agentEval = async (cmd: Command): CmdReturn => {
     if (!surface.specs.has(name)) await cmd.writeError(`agent-eval: ${name} did not describe itself; it is offered by nothing\n`);
   }
 
-  const file = await readQuestions(cmd, typeof flags.fixtures === 'string' ? flags.fixtures : undefined);
-  if (typeof file === 'string') {
-    await cmd.writeError(`agent-eval: ${file}\n`);
-    return 1;
-  }
-  const resolvers = new Set(file.resolvers ?? []);
-  let fixtures = file.questions;
-  if (flags.bucket) fixtures = fixtures.filter((f) => f.bucket === flags.bucket);
-  if (flags.ids) {
-    const ids = new Set(String(flags.ids).split(','));
-    fixtures = fixtures.filter((f) => ids.has(f.id));
-  }
-  if (limit > 0) fixtures = fixtures.slice(0, limit);
-
   // `--user` asks as someone else; by default the loop asks as the account's own person, as the
   // drawer does. An account with no person behind it cannot resolve "min moster".
   let user: { name: string; path: string } | null | undefined;
@@ -182,10 +168,24 @@ export const agentEval = async (cmd: Command): CmdReturn => {
   const promptPath = typeof flags.prompt === 'string' ? flags.prompt : COMMANDS_PROMPT_PATH;
 
   if (flags['print-prompt']) {
-    const system = commandsSystem((await readPrompt(cmd, promptPath)) ?? '', { user: user ?? undefined });
+    const system = systemFor(cmd, (await readPrompt(cmd, promptPath)) ?? '', await askerOf(cmd, user));
     await cmd.writeLn(`${system}\n\n--- tools (${surface.tools.length}) ---\n${JSON.stringify(surface.tools, null, 2)}`);
     return 0;
   }
+
+  const file = await readQuestions(cmd, typeof flags.fixtures === 'string' ? flags.fixtures : undefined);
+  if (typeof file === 'string') {
+    await cmd.writeError(`agent-eval: ${file}\n`);
+    return 1;
+  }
+  const resolvers = new Set(file.resolvers ?? []);
+  let fixtures = file.questions;
+  if (flags.bucket) fixtures = fixtures.filter((f) => f.bucket === flags.bucket);
+  if (flags.ids) {
+    const ids = new Set(String(flags.ids).split(','));
+    fixtures = fixtures.filter((f) => ids.has(f.id));
+  }
+  if (limit > 0) fixtures = fixtures.slice(0, limit);
 
   // Load the model before the clock starts: a cold model takes minutes, which the first questions would be scored as.
   // Its answer names the model the server runs, which is what the run measures.

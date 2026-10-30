@@ -190,6 +190,14 @@ const settleProposals = (messages: ChatMessage[]): void => {
   }
 };
 
+/** The lines of every proposal the user declined since they last wrote, in a chat as `readChat` reads it. */
+export const declinedSinceAsked = (messages: ChatMessage[]): string[] => {
+  const since = messages.findLastIndex((message) => message.role === 'user');
+  return messages.slice(since + 1)
+    .filter((message) => message.settled?.status === 'dismissed')
+    .flatMap((message) => (message.proposal as AssistantProposal).commands.map((entry) => entry.command));
+};
+
 /** How a proposal ended, as the outcome message's content. */
 const outcomeContent = (status: ProposalOutcome['status'], labels: string[], error?: string, script?: string): string => {
   // An edited script is what ran; the labels described the proposal, not it.
