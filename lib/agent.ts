@@ -483,7 +483,7 @@ export const transcriptFromChat = (messages: StoredMessage[]): LlmMessage[] => {
  * so the model gets each command's typed answer. A line that pipes or substitutes into text tools
  * — `ls … | wc -l`, `$(find …)` — runs in text mode, a name per line: in JSON mode each command
  * prints its answer as one line, every count comes out as 1, and the model recounts until the turn
- * runs out. Text mode is set, not left to the caller, since the web interface runs in JSON mode.
+ * runs out. Text mode is set, not left to the caller, since the Web UI runs in JSON mode.
  */
 const scriptFor = async (line: string): Promise<string> => {
   const names = await commandsIn(line);
