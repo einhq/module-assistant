@@ -1,6 +1,6 @@
 {
   "name": "assistant",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Assistant: answers questions by running EiN's commands for the user, with what the installed modules offer it",
   "coreApi": "^0.8.0",
   "imports": {
