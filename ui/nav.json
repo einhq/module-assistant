@@ -6,7 +6,8 @@
       "label": "Chat",
       "icon": "message-circle",
       "to": "/chat",
-      "order": 20
+      "order": 20,
+      "shortcut": "alt+C"
     }
   ],
   "topbar": [
