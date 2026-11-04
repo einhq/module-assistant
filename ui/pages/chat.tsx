@@ -49,7 +49,7 @@ export default function ChatPage() {
         /* The slim bar names the page and holds the new-chat button. A phone has no room for the
            recent-chats pane beside the chat, so there the bar also has a menu of the chats. */
       }
-      <PageBar title='Chat' pattern='mixed' controls={<ChatPageControls phone={phone} />} />
+      <PageBar title='Chat' pattern='mixed' band controls={<ChatPageControls phone={phone} />} />
       <Box style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <ChatHistoryPane />
         <Box style={{ flex: 1, minWidth: 0 }}>
