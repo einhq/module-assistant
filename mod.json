@@ -3,7 +3,7 @@
   "version": "0.5.1",
   "description": "Assistant: answers questions by running EiN's commands for the user, with what the installed modules offer it",
   "license": "Elastic-2.0, with an added permission (LICENSE)",
-  "coreApi": "^0.9.0",
+  "coreApi": "^0.10.0",
   "imports": {
     "@assistant/agent": "./lib/agent.ts",
     "@assistant/answer-links": "./lib/answer-links.ts",
