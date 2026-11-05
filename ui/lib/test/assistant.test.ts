@@ -20,7 +20,7 @@ import {
   waitingLine,
   workLine,
 } from '../assistant.ts';
-import { nodeRoutes } from '@ein/ui/signals';
+import { nodeRoutes, renditionTable } from '@ein/ui/signals';
 
 // A module's `ui.open`, as the shell reads it from the UI manifest.
 nodeRoutes.value = { person: '/people/{name}', location: '/locations/{name}', album: '/albums/{path}' };
@@ -59,6 +59,7 @@ Deno.test("routeForSearch puts the assistant's filters into the parameters of th
 });
 
 Deno.test("replyMediaItems makes lightbox items from the reply's refs", () => {
+  renditionTable.value = { image: { thumb: { width: 320, height: 320, fit: 'cover', quality: 55, kinds: ['photo'] } }, video: {}, audio: {} };
   const [item] = replyMediaItems({ media: [{ path: '/media/a.jpg', name: 'a.jpg', mimetype: 'image/jpeg', width: 400, height: 300, takenAt: '2019-07-12T10:00:00' }] });
   assertEquals(item.path, '/media/a.jpg');
   assertEquals(item.type, 'photo');
