@@ -1,6 +1,6 @@
 {
   "name": "assistant",
-  "version": "0.8.4",
+  "version": "0.8.5",
   "description": "Assistant: answers questions by running EiN's commands for the user, with what the installed modules offer it",
   "license": "MIT",
   "coreApi": "^0.12.0",
