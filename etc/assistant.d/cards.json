@@ -2,7 +2,7 @@
   {
     "name": "chart",
     "route": "/chart",
-    "description": "A chart under the answer, only when the user asks for a chart, graph or diagram. A log (a weight, a measurement): give its path as source and no points; the app reads and plots every entry itself, so do not cat it first and do not copy its values. A series a command prints as cat -t prints a log, such as the weather over a span (weather <lat> <lng> <from> --to=<to>, field temperature): give that command as line and no points; the app runs it and plots every row. Otherwise points, at most 60: numbers you counted from the results, or ones you worked out yourself, such as counts in a text the user gave.",
+    "description": "A chart under the answer, only when the user asks for a chart, graph or diagram. A log (a weight, a measurement): give its path as source and no points; the app reads and plots every entry itself, so do not cat it first and do not copy its values. A series a command prints as cat -t prints a log, such as the weather over the last days (weather --place=Göteborg --days=7, field temperature): give that command as line and no points; the app runs it and plots every row. Otherwise points, at most 60: numbers you counted from the results, or ones you worked out yourself, such as counts in a text the user gave.",
     "params": {
       "type": "object",
       "properties": {
@@ -30,7 +30,7 @@
         },
         "line": {
           "type": "string",
-          "description": "A command line that prints the series, a line each as <time> TAB <JSON>, when there is no source: weather 57.71 11.97 2026-10-30T00:00 --to=2026-11-06T00:00."
+          "description": "A command line that prints the series, a line each as <time> TAB <JSON>, when there is no source: weather --place=Göteborg --days=7."
         },
         "field": {
           "type": "string",
