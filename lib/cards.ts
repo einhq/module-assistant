@@ -121,17 +121,11 @@ export const cardFrom = async (
   const given = raw === true ? {} : asRecord(raw);
   if (!given) return undefined;
   const properties = asRecord(card.params.properties) ?? {};
-  // Data the model named itself: a path or a list. A series is filled in only for a card without it.
-  const named = Object.entries(properties).some(([key, schemaValue]) => {
-    const schema = asRecord(schemaValue);
-    return (isPath(schema ?? undefined) || schema?.type === 'array') && given[key] !== undefined && listOf(given[key]).length > 0;
-  });
   const query = new URLSearchParams();
   for (const [key, schemaValue] of Object.entries(properties)) {
     const schema = asRecord(schemaValue);
     let value = given[key];
     if ((value === undefined || listOf(value).length === 0) && card.fill[key] === 'pictures' && pictures.length) value = pictures;
-    if ((value === undefined || listOf(value).length === 0) && card.fill[key] === 'series' && series && !named) value = series;
     if (value === undefined) continue;
     if (schema?.type === 'array') {
       const items = asRecord(schema.items);
@@ -151,6 +145,14 @@ export const cardFrom = async (
       if (one !== undefined) query.set(key, one);
     }
   }
+  // A series only for a card left without data of its own: no path that held and no list. A
+  // command the model wrote where a path goes is no path, and the series it ran is what it meant.
+  const seriesKey = Object.keys(card.fill).find((key) => card.fill[key] === 'series');
+  const named = Object.entries(properties).some(([key, schemaValue]) => {
+    const schema = asRecord(schemaValue);
+    return (isPath(schema ?? undefined) || schema?.type === 'array') && query.has(key);
+  });
+  if (seriesKey && series && !named && !query.has(seriesKey)) query.set(seriesKey, series);
   const required = Array.isArray(card.params.required) ? card.params.required.map(String) : [];
   if (required.some((key) => !query.has(key)) || [...query.keys()].length === 0) return undefined;
   return { id: card.id, route: `${card.route}${card.route.includes('?') ? '&' : '?'}${query}` };
