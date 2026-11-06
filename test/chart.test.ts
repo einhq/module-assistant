@@ -32,6 +32,18 @@ Deno.test('a source that is not a readable log draws nothing, whatever points ca
   assertEquals(await chartFrom({ kind: 'line', source: '/archive/people/Bo/measurements/weight', points: [['a', 1], ['b', 2]] }, readLog), undefined);
 });
 
+Deno.test("a line is plotted from what it printed, a named field of each row; one the viewer's run refuses draws nothing", async () => {
+  const WEATHER = 'weather 57.71 11.97 2026-11-01T10:00 --to=2026-11-01T12:00';
+  const printed = [10, 11, 12].map((hour, index) => `2026-11-01T${hour}:00:00.000Z\t{"temperature":${4 + index / 2},"windSpeed":3}`).join('\n');
+  const readLine = (line: string) => Promise.resolve(line === WEATHER ? printed : undefined);
+  assertEquals(await chartFrom({ kind: 'line', line: WEATHER, field: 'temperature', unit: '°C' }, readLog, unitOf, readLine), {
+    kind: 'line',
+    unit: '°C',
+    points: [{ label: '2026-11-01 10:00', value: 4 }, { label: '2026-11-01 11:00', value: 4.5 }, { label: '2026-11-01 12:00', value: 5 }],
+  });
+  assertEquals(await chartFrom({ kind: 'line', line: 'rm -r /archive', points: [['a', 1], ['b', 2]] }, readLog, unitOf, readLine), undefined);
+});
+
 Deno.test('entries sharing a day are labelled to the minute, the others by day; a named field is read', () => {
   const mixed = '2020-01-02T00:00:00.000Z\t5\n2020-01-01T08:30:00.000Z\t3\n2020-01-01T20:15:00.000Z\t4';
   assertEquals(logPoints(mixed), [{ label: '2020-01-01 08:30', value: 3 }, { label: '2020-01-01 20:15', value: 4 }, { label: '2020-01-02', value: 5 }]);

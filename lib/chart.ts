@@ -1,11 +1,12 @@
 /**
  * A chart card's query as the chart it draws (`/chart`, a card in the assistant's own drop-in).
  *
- * Two ways to say what to plot. `points` are values the model wrote itself, for a handful of them —
+ * Three ways to say what to plot. `points` are values the model wrote itself, for a handful of them —
  * pictures per year it counted, three people's ages. `source` names a log, read as the viewer: the
  * model cannot copy a series of a hundred rows without moving values between them, and a chart of
- * a person's weight that is wrong in places is worse than none. Imports nothing, so the page can
- * use it.
+ * a person's weight that is wrong in places is worse than none. `line` is a command line that
+ * prints a series as `cat -t` prints a log, such as `weather … --to=…`, run as the viewer when it
+ * only reads. Imports nothing, so the page can use it.
  */
 
 type ChartKind = 'line' | 'bar' | 'pie';
@@ -79,7 +80,7 @@ const entryValue = (data: unknown, field?: string): number | undefined => {
 };
 
 /**
- * A log as `cat -t` printed it — `<ISO time>\t<JSON>` a line — as points in time order, labelled by
+ * A log as `cat -t` printed it — `<ISO time>\t<JSON>` a line — or a command printing the same, as points in time order, labelled by
  * day, or by minute where two entries share one. A log is written in the order entries arrived,
  * which for an imported one is not the order they happened.
  */
@@ -113,17 +114,20 @@ export const logPoints = (printed: string, field?: string): ChartPoint[] => {
  * The chart a card's query asks for, or nothing when there is nothing honest to draw.
  *
  * `readLog` gives a log as `cat -t` prints it, or nothing when the path is not a log the viewer can
- * read; `unitOf` looks up a log's own unit when the query gives none.
+ * read; `unitOf` looks up a log's own unit when the query gives none; `readLine` what a line
+ * printed, or nothing when it does not only read or fails.
  */
 export const chartFrom = async (
   raw: unknown,
   readLog: (path: string) => Promise<string | undefined>,
   unitOf: (path: string) => Promise<string | undefined> = () => Promise.resolve(undefined),
+  readLine: (line: string) => Promise<string | undefined> = () => Promise.resolve(undefined),
 ): Promise<ChartData | undefined> => {
   const record = asRecord(raw);
   if (!record) return undefined;
   const source = text(record.source, 1000);
-  const kind = KINDS[String(record.kind ?? record.type ?? (source ? 'line' : 'bar')).trim().toLowerCase()];
+  const line = source ? undefined : text(record.line, 1000);
+  const kind = KINDS[String(record.kind ?? record.type ?? (source || line ? 'line' : 'bar')).trim().toLowerCase()];
   if (!kind) return undefined;
   let points: ChartPoint[];
   let unit = text(record.unit, 20);
@@ -132,6 +136,10 @@ export const chartFrom = async (
     if (printed === undefined) return undefined;
     points = logPoints(printed, text(record.field, 60)).slice(-MAX_POINTS);
     unit ??= await unitOf(source);
+  } else if (line) {
+    const printed = await readLine(line);
+    if (printed === undefined) return undefined;
+    points = logPoints(printed, text(record.field, 60)).slice(-MAX_POINTS);
   } else {
     points = (Array.isArray(record.points) ? record.points : []).slice(0, MAX_WRITTEN_POINTS).map(pointOf).filter((point): point is ChartPoint => !!point);
   }

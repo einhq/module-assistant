@@ -129,7 +129,9 @@ page's tree with nothing to expand) and a map (`/map/pins`: `position-get` of th
 pictures named, `location-region` of the areas; a picture opens the lightbox, nothing with no
 position is drawn, so no coordinate on it is the model's, and it does not zoom on the wheel, so the
 chat still scrolls over it). The assistant offers a chart (`/chart`: a log named by its path, read
-with `cat -t`, every entry in time order with the log's own unit, or points the model wrote,
+with `cat -t`, every entry in time order with the log's own unit; a line that prints the same
+shape, `weather … --to=…`, run as the viewer when `assistant-commands judge` says it reads, since
+the line comes from the address; or points the model wrote,
 drawn as written — numbers from a result, or ones it worked out — by the kit's `Chart` over
 `@mantine/charts`; a line whose labels are all dates is spaced by time). An answer with a card
 shows no fallback pictures from a search made along the way, unless the card takes the pictures.
