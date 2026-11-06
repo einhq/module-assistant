@@ -31,7 +31,11 @@ export type CardOffer = {
   route: string;
   description: string;
   params: Schema;
-  /** Parameters filled in when the model leaves them out: `pictures`, the paths of the answer's pictures. */
+  /**
+   * Parameters filled in when the model leaves them out: `pictures`, the paths of the answer's
+   * pictures; `series`, the last line the turn ran that printed a series (`isSeries`), when the
+   * model named no path and no list for the card either.
+   */
   fill: Record<string, string>;
 };
 
@@ -102,7 +106,8 @@ const scalarOf = async (value: unknown, schema: Schema | undefined, visible: (pa
  * The card the model asked for, as its route with the query its arguments make, or nothing.
  *
  * `visible` says whether the asker can see a path; `pictures` are the paths of the pictures the
- * answer shows, for a parameter the card fills with them. A scalar is one query value, a list of
+ * answer shows, for a parameter the card fills with them, and `series` the last line the turn ran
+ * that printed a series. A scalar is one query value, a list of
  * scalars one value each, and anything else its JSON, which the card's page reads back.
  */
 export const cardFrom = async (
@@ -110,16 +115,23 @@ export const cardFrom = async (
   raw: unknown,
   visible: (path: string) => Promise<boolean>,
   pictures: string[],
+  series?: string,
 ): Promise<AssistantCard | undefined> => {
   // `map: true` asks for the card with nothing named, as `map: {}` does.
   const given = raw === true ? {} : asRecord(raw);
   if (!given) return undefined;
   const properties = asRecord(card.params.properties) ?? {};
+  // Data the model named itself: a path or a list. A series is filled in only for a card without it.
+  const named = Object.entries(properties).some(([key, schemaValue]) => {
+    const schema = asRecord(schemaValue);
+    return (isPath(schema ?? undefined) || schema?.type === 'array') && given[key] !== undefined && listOf(given[key]).length > 0;
+  });
   const query = new URLSearchParams();
   for (const [key, schemaValue] of Object.entries(properties)) {
     const schema = asRecord(schemaValue);
     let value = given[key];
     if ((value === undefined || listOf(value).length === 0) && card.fill[key] === 'pictures' && pictures.length) value = pictures;
+    if (value === undefined && card.fill[key] === 'series' && series && !named) value = series;
     if (value === undefined) continue;
     if (schema?.type === 'array') {
       const items = asRecord(schema.items);

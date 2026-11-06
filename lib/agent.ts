@@ -50,6 +50,7 @@ import { hitFrom, type SearchFilters } from './search.ts';
 import { fastAnswer } from '@assistant/fast';
 import { keepKnownLinks } from '@assistant/answer-links';
 import { cardFrom, type CardOffer, cardProperty, loadCards } from '@assistant/cards';
+import { isSeries } from '@assistant/chart';
 import { modulePrompts, offeredTools } from './drop-ins.ts';
 import { findCommands, indexedSpec, unavailable } from '@assistant/command-index';
 import { listLines, tableFrom, withoutRows } from '@assistant/table';
@@ -798,6 +799,8 @@ export const ask = async (cmd: Command, options: AgentOptions, surface?: Surface
   const made = new Set<string>();
   /** What each line that ran this turn printed, by `sameLine`: a table of it needs no second run. */
   const printedBy = new Map<string, string>();
+  /** The last line this turn that printed a series (`isSeries`), for a chart the model gave no data. */
+  let series: string | undefined;
   let malformed = 0;
   let repeats = 0;
   let budgetSpent = false;
@@ -1027,7 +1030,7 @@ export const ask = async (cmd: Command, options: AgentOptions, surface?: Surface
       }
       const drawn: AssistantCard[] = [];
       for (const card of asked) {
-        const one = await cardFrom(card, parsed.args[card.name], (path) => nodeExists(cmd, path), shown.map((hit) => hit.path));
+        const one = await cardFrom(card, parsed.args[card.name], (path) => nodeExists(cmd, path), shown.map((hit) => hit.path), series);
         if (one) drawn.push(one);
       }
       return reply({
@@ -1111,6 +1114,7 @@ export const ask = async (cmd: Command, options: AgentOptions, surface?: Surface
       if (ran.code === 0) {
         noteResult(view, seen, media);
         printedBy.set(sameLine(line), output);
+        if (isSeries(output)) series = line;
         onResult?.(view, output);
       } else {
         view = { error: ran.timedOut ? clock.timedOut() : `${ran.stderr || output}`.trim().slice(0, 400) };

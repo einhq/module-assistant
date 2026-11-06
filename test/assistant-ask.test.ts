@@ -370,6 +370,21 @@ Deno.test({
       assertEquals(stored.cards, reply.cards);
     });
 
+    await t.step('a chart given no data is of the last series the turn ran; one given points keeps them', async () => {
+      const line = `cat -t ${ANNA}/measurements/weight | tail -n 2`;
+      const script: Script = (last) =>
+        last.role === 'user' ? tool('run_command', { command: line }) : tool('final_answer', { answer: 'Så här.', chart: { kind: 'line', field: 'value.value' } });
+      const { reply } = await askWith(script, shq('rita Annas vikt'));
+      assertEquals(reply.cards, [{ id: 'assistant.chart', route: `/chart?${new URLSearchParams({ kind: 'line', line, field: 'value.value' })}` }]);
+      const points = [{ label: 'a', value: 1 }, { label: 'b', value: 2 }];
+      const counted: Script = (last) =>
+        last.role === 'user' ? tool('run_command', { command: line }) : tool('final_answer', { answer: 'Så här.', chart: { kind: 'bar', points } });
+      assertEquals((await askWith(counted, shq('rita två staplar'))).reply.cards, [{
+        id: 'assistant.chart',
+        route: `/chart?${new URLSearchParams({ kind: 'bar', points: JSON.stringify(points) })}`,
+      }]);
+    });
+
     await t.step('a path the asker cannot see is left out of a card, and a card left without what it needs is none', async () => {
       const nobody = `${PEOPLE}/Nobody_Exempel`;
       const script: Script = () => tool('final_answer', { answer: 'Familjen.', tree: { person: ANNA, people: [BO, nobody] }, chart: { source: `${ANNA}/measurements/none` } });

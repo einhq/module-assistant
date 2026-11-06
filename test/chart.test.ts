@@ -1,6 +1,6 @@
 import { assert, assertEquals, assertStringIncludes } from '@std/assert';
 import { resultJson } from '../lib/agent.ts';
-import { chartFrom, logPoints, MAX_SLICES, MAX_WRITTEN_POINTS, numberOf } from '../lib/chart.ts';
+import { chartFrom, isSeries, logPoints, MAX_SLICES, MAX_WRITTEN_POINTS, numberOf } from '../lib/chart.ts';
 
 const WEIGHT = '/archive/people/Anna_Exempel/measurements/weight';
 // As `cat -t` prints an imported log: in the order the entries were written, not when they happened.
@@ -42,6 +42,15 @@ Deno.test("a line is plotted from what it printed, a named field of each row; on
     points: [{ label: '2026-11-01 10:00', value: 4 }, { label: '2026-11-01 11:00', value: 4.5 }, { label: '2026-11-01 12:00', value: 5 }],
   });
   assertEquals(await chartFrom({ kind: 'line', line: 'rm -r /archive', points: [['a', 1], ['b', 2]] }, readLog, unitOf, readLine), undefined);
+});
+
+Deno.test('a field named as a path is followed, or read by its first name; a series is cat -t lines or a list of timed objects', () => {
+  const printed = '2020-01-01T08:00:00.000Z\t{"temperature":4.5,"windSpeed":3}\n2020-01-01T09:00:00.000Z\t{"temperature":{"value":5}}';
+  assertEquals(logPoints(printed, 'temperature.value').map((point) => point.value), [4.5, 5]);
+  assert(isSeries(printed));
+  assert(isSeries(JSON.stringify([{ time: '2020-01-01T08:00:00.000Z', temperature: {} }, { time: '2020-01-01T09:00:00.000Z' }])));
+  assert(!isSeries('2020-01-01T08:00:00.000Z\t{"value":1}'));
+  assert(!isSeries(JSON.stringify([{ name: 'Anna' }, { name: 'Bo' }])));
 });
 
 Deno.test('entries sharing a day are labelled to the minute, the others by day; a named field is read', () => {

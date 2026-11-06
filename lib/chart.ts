@@ -68,12 +68,19 @@ const pointOf = (raw: unknown): ChartPoint | undefined => {
   return label !== undefined && value !== undefined ? { label, value } : undefined;
 };
 
-/** The number in one log entry: the entry itself, the field asked for, `value`, or its only number. */
+/**
+ * The number in one log entry: the entry itself, the field asked for, `value`, or its only number.
+ * A field named as a path (`temperature.value`, as the model reads a command's JSON) is followed,
+ * and where the entry has no such path, its first name is the field.
+ */
 const entryValue = (data: unknown, field?: string): number | undefined => {
   if (typeof data === 'number') return Number.isFinite(data) ? data : undefined;
   const record = asRecord(data);
   if (!record) return undefined;
-  if (field) return numberOf(record[field]);
+  if (field) {
+    const followed = field.split('.').reduce<unknown>((value, name) => asRecord(value)?.[name], record);
+    return numberOf(followed) ?? numberOf(record[field.split('.')[0]]);
+  }
   if (typeof record.value === 'number') return numberOf(record.value);
   const numbers = Object.values(record).filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
   return numbers.length === 1 ? numbers[0] : undefined;
@@ -108,6 +115,24 @@ export const logPoints = (printed: string, field?: string): ChartPoint[] => {
     label: count.get(days[index])! > 1 ? entry.at.slice(0, 16).replace('T', ' ') : days[index],
     value: entry.value,
   }));
+};
+
+/**
+ * Whether a command printed a series a chart can draw: two or more lines as `cat -t` prints a log,
+ * or, under JSON, a list of two or more objects each with its `time`.
+ */
+export const isSeries = (printed: string): boolean => {
+  const trimmed = printed.trim();
+  if (trimmed.startsWith('[')) {
+    try {
+      const list = JSON.parse(trimmed);
+      return Array.isArray(list) && list.length >= 2 &&
+        list.every((item) => typeof asRecord(item)?.time === 'string' && !Number.isNaN(Date.parse(asRecord(item)!.time as string)));
+    } catch {
+      return false;
+    }
+  }
+  return trimmed.split('\n').filter((line) => /^\S+\t/.test(line) && !Number.isNaN(Date.parse(line.slice(0, line.indexOf('\t'))))).length >= 2;
 };
 
 /**
