@@ -6,7 +6,11 @@
  * writes is the answer. It is the command the core setting `CFG_LANGUAGE_MODEL` names (set in the
  * assistant's `etc/config`), so a module that reads a person's words with a model — the search
  * box's parser — asks through the setting and names no module. A failure to reach the model is a
- * failure of the command, for the caller to fall back from.
+ * failure of the command, for the caller to fall back from, and so is an answer cut off by
+ * `--max-tokens` before its first word.
+ *
+ * It thinks only when given `--think`, whatever `CFG_LLM_THINKING` says: the thought is written
+ * within the caller's `--max-tokens` and `--timeout`, which a caller sized for the answer alone.
  */
 
 import type { LanguageModelReply } from '@ein/api';
@@ -45,8 +49,12 @@ const llmChat = async (cmd: Command): CmdReturn => {
     const reply = await chat(cmd, [...(flags.system ? [{ role: 'system' as const, content: flags.system }] : []), ...history, { role: 'user', content: message }], {
       ...(Number.isFinite(maxTokens) && maxTokens > 0 ? { maxTokens } : {}),
       ...(Number.isFinite(timeout) && timeout > 0 ? { timeoutSeconds: timeout } : {}),
-      ...(flags.think === true ? { thinking: true } : {}),
+      ...(flags.think === true ? { thinking: true } : cmd.env.CFG_LLM_THINKING === '1' ? { thinking: false } : {}),
     });
+    if (reply.cut && !reply.content.trim()) {
+      await cmd.writeError(`llm-chat: the answer was cut off before it began: ${reply.reasoning ? 'the thought used up' : 'it needs more than'} --max-tokens\n`);
+      return 1;
+    }
     if (cmd.json) await cmd.writeJSON({ content: reply.content, model: reply.model } satisfies LanguageModelReply);
     else await cmd.writeLn(reply.content);
     return 0;
@@ -68,7 +76,7 @@ llmChat.spec = {
     { name: 'history', type: 'string' as const, description: 'earlier turns, as JSON: [{"role":"user"|"assistant","content":"…"}]' },
     { name: 'max-tokens', type: 'number' as const, description: 'the most the answer may be (default 768)' },
     { name: 'timeout', type: 'number' as const, description: 'seconds to wait for the answer (default 180)' },
-    { name: 'think', type: 'bool' as const, description: 'let the model think before it answers (without it, CFG_LLM_THINKING decides)' },
+    { name: 'think', type: 'bool' as const, description: 'let the model think before it answers, within --max-tokens and --timeout' },
   ],
   examples: ["llm-chat 'Vad är huvudstaden i Norge?'", "llm-chat --system 'Answer in one word.' 'The colour of the sky?'"],
   returns: 'content, the answer, and model, the model that wrote it.',

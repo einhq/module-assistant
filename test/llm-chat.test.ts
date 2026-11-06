@@ -40,14 +40,23 @@ Deno.test({ name: 'llm-chat', sanitizeResources: false, sanitizeOps: false }, as
       assertEquals(`${(await client.exec(`JSON_OUTPUT=0 CFG_LLM_URL=${model.url} llm-chat hej`)).data}`.trim(), 'Oslo.');
     });
 
-    await t.step('without --think, CFG_LLM_THINKING decides; with it, the model thinks', async () => {
+    await t.step('the model thinks only with --think, whatever CFG_LLM_THINKING says', async () => {
       const kwargs = () => (model.requests.at(-1) as { chat_template_kwargs?: unknown }).chat_template_kwargs;
       await client.execJson(`CFG_LLM_URL=${model.url} llm-chat hej`);
       assertEquals(kwargs(), undefined);
       await client.execJson(`CFG_LLM_THINKING=1 CFG_LLM_URL=${model.url} llm-chat hej`);
-      assertEquals(kwargs(), { enable_thinking: true });
+      assertEquals(kwargs(), { enable_thinking: false });
       await client.execJson(`CFG_LLM_THINKING=0 CFG_LLM_URL=${model.url} llm-chat --think hej`);
       assertEquals(kwargs(), { enable_thinking: true });
+    });
+
+    await t.step('an answer cut off by --max-tokens before its first word is a failure', async () => {
+      const thinker = startStubLlm(() => ({ thought: 'The sky, then. Blue, mostly, but' }));
+      try {
+        await cmd.shouldFailWith(`CFG_LLM_URL=${thinker.url} llm-chat --think --max-tokens 8 hej`, 'the thought used up --max-tokens');
+      } finally {
+        await thinker.close();
+      }
     });
 
     await t.step('a model that does not answer is a failure, for the caller to fall back from', async () => {
