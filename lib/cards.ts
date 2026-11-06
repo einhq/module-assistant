@@ -131,7 +131,7 @@ export const cardFrom = async (
     const schema = asRecord(schemaValue);
     let value = given[key];
     if ((value === undefined || listOf(value).length === 0) && card.fill[key] === 'pictures' && pictures.length) value = pictures;
-    if (value === undefined && card.fill[key] === 'series' && series && !named) value = series;
+    if ((value === undefined || listOf(value).length === 0) && card.fill[key] === 'series' && series && !named) value = series;
     if (value === undefined) continue;
     if (schema?.type === 'array') {
       const items = asRecord(schema.items);
