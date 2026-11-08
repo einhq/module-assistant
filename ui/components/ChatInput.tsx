@@ -41,8 +41,9 @@ export function ChatInput() {
     void ask(text);
   };
 
+  // Enter is a new line, as in every other text box; Ctrl+Enter (Cmd+Enter on a Mac) sends.
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       handleSubmit();
     }
