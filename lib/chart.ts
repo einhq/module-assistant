@@ -17,7 +17,7 @@ type ChartPoint = { label: string; value: number };
 export type ChartData = { kind: ChartKind; title?: string; unit?: string; points: ChartPoint[] };
 
 /** More points than this are the log's, not the model's, and more than a chat bubble can show apart. */
-const MAX_POINTS = 1000;
+export const MAX_POINTS = 1000;
 /** Points the model may write itself; past that it copies badly, and a log is the way. */
 export const MAX_WRITTEN_POINTS = 60;
 /** More slices than this is not a pie any more, and the palette has this many colours. */
@@ -138,7 +138,7 @@ export const isSeries = (printed: string): boolean => {
 /**
  * The chart a card's query asks for, or nothing when there is nothing honest to draw.
  *
- * `readLog` gives a log as `cat -t` prints it, or nothing when the path is not a log the viewer can
+ * `readLog` gives a log's latest entries as `cat -t` prints them, or nothing when the path is not a log the viewer can
  * read; `unitOf` looks up a log's own unit when the query gives none; `readLine` what a line
  * printed, or nothing when it does not only read or fails.
  */

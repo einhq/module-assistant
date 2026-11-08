@@ -4,10 +4,10 @@ import { execCommand, execScript } from '@ein/ui/signals';
 import { Center, Loader, Text } from '@mantine/core';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { type ChartData, chartFrom } from '@assistant/chart';
+import { type ChartData, chartFrom, MAX_POINTS } from '@assistant/chart';
 
-/** A log as `cat -t` prints it, or nothing when the viewer cannot read it as one. */
-const readLog = (path: string): Promise<string | undefined> => execScript(`cat -t ${shq(path)}`).catch(() => undefined);
+/** A log's latest entries as `log-read` prints them, `cat -t`'s form, or nothing when the viewer cannot read it as one. */
+const readLog = (path: string): Promise<string | undefined> => execScript(`log-read ${shq(path)} -n ${MAX_POINTS}`).catch(() => undefined);
 
 /**
  * What a line printed, run as the viewer only when the assistant's judge says it changes nothing:

@@ -3,7 +3,7 @@
   "version": "0.8.8",
   "description": "Assistant: answers questions by running EiN's commands for the user, with what the installed modules offer it",
   "license": "MIT",
-  "coreApi": "^0.12.0",
+  "coreApi": "^0.12.14",
   "imports": {
     "@assistant/agent": "./lib/agent.ts",
     "@assistant/answer-links": "./lib/answer-links.ts",
