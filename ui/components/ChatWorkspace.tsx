@@ -8,12 +8,13 @@ import { type MouseEvent, useEffect, useRef, useState } from 'react';
 import { ChatInput } from './ChatInput.tsx';
 import { ChatMessages } from './ChatMessages.tsx';
 import { formatChatTime } from './chat-time.ts';
+import { formatDate } from '@ein/ui/lib';
 
 const when = (date: Date): string => {
   const today = new Date();
   return date.toDateString() === today.toDateString()
     ? formatChatTime(date)
-    : date.toLocaleDateString([], { month: 'short', day: 'numeric', year: date.getFullYear() === today.getFullYear() ? undefined : 'numeric' });
+    : formatDate(date, { month: 'short', day: 'numeric', year: date.getFullYear() === today.getFullYear() ? undefined : 'numeric' });
 };
 
 /**
