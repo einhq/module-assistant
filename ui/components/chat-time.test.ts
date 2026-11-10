@@ -10,5 +10,5 @@ Deno.test('chat time pads midnight with zeroes', () => {
 });
 
 Deno.test('chat timestamp includes the full date and the time', () => {
-  assertEquals(formatChatTimestamp(new Date(2026, 8, 22, 13, 5)), 'Tuesday, 22 September 2026 at 13:05');
+  assertEquals(formatChatTimestamp(new Date(2026, 8, 22, 13, 5)), 'tisdag 22 september 2026 kl. 13:05');
 });
