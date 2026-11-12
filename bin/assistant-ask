@@ -220,15 +220,17 @@ const assistantAsk = async (cmd: Command): CmdReturn => {
 
 assistantAsk.spec = {
   name: 'assistant-ask',
-  effect: 'write' as const,
+  // A turn changes nothing but the chat it keeps (`--chat`, `--resume`): the commands it runs are
+  // judged as they start, and a visitor asks with `--history`.
+  effect: 'read' as const,
   description: "Answer a question about EiN by running its commands (the chat drawer's backend)",
   args: [
     { name: 'message', type: 'string' as const, description: 'what the user wrote; none with --resume' },
   ],
   flags: [
     { name: 'think', type: 'bool' as const, description: 'think before every model call: slower, fewer malformed commands' },
-    { name: 'resume', type: 'bool' as const, description: "go on with the chat's last turn after the user ran or declined its proposal" },
-    { name: 'chat', type: 'string' as const, description: 'durable chat id; loads and appends history in $HOME/.chats' },
+    { name: 'resume', type: 'bool' as const, writes: true, description: "go on with the chat's last turn after the user ran or declined its proposal" },
+    { name: 'chat', type: 'string' as const, writes: true, description: 'durable chat id; loads and appends history in $HOME/.chats' },
     { name: 'history', type: 'string' as const, description: 'earlier turns as a JSON array of {role: user|assistant, content}' },
     {
       name: 'context',
