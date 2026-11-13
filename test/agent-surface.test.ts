@@ -1,7 +1,7 @@
 /**
  * The commands' specs are asked once and kept: asking all of them on every turn costs seconds. A set
  * with a command missing is not kept, so the missing one is asked again on the next turn. The
- * cards are read every turn, from the modules' drop-ins.
+ * cards are read every turn, from the modules' drop-ins. A dry-run flag is not offered.
  */
 
 import { assertEquals } from '@std/assert';
@@ -26,7 +26,10 @@ const fakeCmd = (silent: Set<string>) => {
       }
       const name = line.replace('JSON_OUTPUT=1 ', '').split(' ')[0];
       asked.push(name);
-      const stdout = silent.has(name) ? '' : JSON.stringify({ name, description: `the ${name} command`, args: [], flags: [] });
+      const flags = name === 'ls'
+        ? [{ name: 'long', type: 'bool', description: 'each with its details' }, { name: 'dry-run', type: 'bool', dryRun: true, description: 'change nothing' }]
+        : [];
+      const stdout = silent.has(name) ? '' : JSON.stringify({ name, description: `the ${name} command`, args: [], flags });
       return Promise.resolve({ code: silent.has(name) ? 1 : 0, stdout, stderr: '' });
     },
   } as unknown as Command;
@@ -56,6 +59,9 @@ Deno.test('a whole surface is kept and the next turn asks nothing', async () => 
     ['find_commands', 'command_help', 'run_command', 'final_answer'],
     'the commands, then the way to every other command, then the answer',
   );
+  const ls = JSON.stringify(surface.tools[0]);
+  assertEquals([ls.includes('long'), ls.includes('dry-run')], [true, false], "a dry run is the loop's to try, not offered");
+  assertEquals(surface.specs.get('ls')?.flags?.length, 2, 'the spec it judges lines by keeps it');
 });
 
 Deno.test('a script the user ran comes back to the model with what it printed', () => {

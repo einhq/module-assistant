@@ -302,7 +302,10 @@ export const loadSurface = async (cmd: Command): Promise<Surface> => {
     if (specs.size === names.length) specsCache = { at: Date.now(), names: key, specs };
   }
   const cards = await loadCards(cmd);
-  const tools: LlmTool[] = [...[...specs.values()].map(toolSchema), FIND_COMMANDS, COMMAND_HELP, RUN_COMMAND, finalAnswer(cards)].map((schema) => ({
+  // A dry run is not offered: a proposal is tried with it before it is shown, and a model handed one
+  // takes what it printed for the change made, and says so.
+  const offered = [...specs.values()].map((spec) => spec.flags?.some((flag) => flag.dryRun) ? { ...spec, flags: spec.flags.filter((flag) => !flag.dryRun) } : spec);
+  const tools: LlmTool[] = [...offered.map(toolSchema), FIND_COMMANDS, COMMAND_HELP, RUN_COMMAND, finalAnswer(cards)].map((schema) => ({
     type: 'function',
     function: schema,
   }));
