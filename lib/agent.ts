@@ -700,6 +700,18 @@ export const ampersandInPath = (line: string): string | undefined => {
 };
 
 /** A change's title when the model gave none: its first line. */
+/**
+ * A write line as its command's dry run: the line with the switch its spec marks `dryRun`, when
+ * the line is that one command alone. Undefined for anything else, which is proposed untried.
+ */
+const dryRunOf = async (cmd: Command, line: string, specs: Map<string, CmdSpec>): Promise<string | undefined> => {
+  const names = await commandsIn(line);
+  if (names.length !== 1 || /[|;&<>`$\n]/.test(line.replace(/'[^']*'/g, ''))) return undefined;
+  const spec = specs.get(names[0]) ?? await indexedSpec(cmd, names[0]);
+  const flag = spec?.flags?.find((each) => each.dryRun && each.type === 'bool');
+  return flag ? `${line} ${flag.name.length === 1 ? '-' : '--'}${flag.name}` : undefined;
+};
+
 const firstCommandOf = (line: string): string => {
   const first = line.split('\n').map((part) => part.trim()).find((part) => part && !part.startsWith('#')) ?? line;
   return first.length > 60 ? `${first.slice(0, 59).trimEnd()}…` : first;
@@ -1083,9 +1095,12 @@ export const ask = async (cmd: Command, options: AgentOptions, surface?: Surface
 
     /**
      * A line that changes something: never run here. The turn ends as a card the user runs or
-     * declines — but not the guest's, who changes nothing: the model hears so and goes on.
+     * declines — but not the guest's, who changes nothing: the model hears so and goes on. A line
+     * whose command has a dry run is tried with it first, and one that fails is handed back to the
+     * model to correct (`retry`) rather than shown: a card the user confirms only to see it refused
+     * is worse than none.
      */
-    const propose = async (line: string, title: string, targets: { name: string; path: string }[]): Promise<AgentReply | undefined> => {
+    const propose = async (line: string, title: string, targets: { name: string; path: string }[]): Promise<AgentReply | 'retry' | undefined> => {
       if (isVisitor(cmd.access)) {
         record({ tool: parsed!.name, args: parsed!.args, summary: `${line} — refused`, line, verdict: 'failed' });
         turn.push(result(parsed!.id, { error: GUEST_WRITES }));
@@ -1095,6 +1110,27 @@ export const ask = async (cmd: Command, options: AgentOptions, surface?: Surface
         record({ tool: parsed!.name, args: parsed!.args, summary: `${line} — refused`, line, verdict: 'failed' }, DECLINED_AGAIN);
         turn.push(result(parsed!.id, { error: DECLINED_AGAIN }));
         return undefined;
+      }
+      const tried = await dryRunOf(cmd, line, specs);
+      if (tried && clock.limitMs !== undefined) {
+        const ranAt = Date.now();
+        const ran = await cmd.execute(`JSON_OUTPUT=0 ${tried}`, { timeoutMs: clock.limitMs });
+        if (ran.code !== 0) {
+          const said = `${ran.stdout ?? ''}\n${ran.stderr ?? ''}`.trim();
+          record({
+            tool: parsed!.name,
+            args: parsed!.args,
+            summary: `${tried} — failed`,
+            line: tried,
+            code: ran.code,
+            bytes: said.length,
+            verdict: 'failed',
+            ms: Date.now() - ranAt,
+          }, said);
+          turn.push(result(parsed!.id, { error: `not proposed: tried first as ${tried}, which changed nothing and said:\n${said}\nCorrect the line and propose it again.` }));
+          spend();
+          return 'retry';
+        }
       }
       record({ tool: parsed!.name, args: parsed!.args, summary: line, line, verdict: 'proposed', ms: 0 });
       turn.push(result(parsed!.id, { proposed: line, note: 'shown to the user to run or decline; not run yet' }));
@@ -1219,6 +1255,7 @@ export const ask = async (cmd: Command, options: AgentOptions, surface?: Surface
       }
       if (judgement.effect === 'write') {
         const proposed = await propose(line, why || firstCommandOf(line), targetsOf(line, seen));
+        if (proposed === 'retry') continue;
         if (proposed) return proposed;
         if (++malformed > RETRIES) return failed('the model kept proposing changes the guest may not make');
         continue;
@@ -1258,6 +1295,7 @@ export const ask = async (cmd: Command, options: AgentOptions, surface?: Surface
         .filter((value): value is string => typeof value === 'string' && value.startsWith('/'))
         .map((path) => ({ name: seen.named.get(path) ?? slugOf(path), path }));
       const proposed = await propose(line, spec.description ?? parsed.name, targets);
+      if (proposed === 'retry') continue;
       if (proposed) return proposed;
       if (++malformed > RETRIES) return failed('the model kept proposing changes the guest may not make');
       continue;

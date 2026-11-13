@@ -586,6 +586,15 @@ Deno.test({
       assertEquals(asked.reply.proposal?.commands[0].command, 'rm /home/admin/exempel');
     });
 
+    await t.step('a line whose command has a dry run is tried with it first: one that fails goes back to the model, not to a card', async () => {
+      const script: Script = (last) => tool('run_command', { command: last.role === 'user' ? 'session-reap --max=-1' : 'session-reap --max=5' });
+      const { reply, asked } = await askWith(script, shq('städa bort gamla sessioner'));
+      assertEquals(reply.proposal?.commands[0].command, 'session-reap --max=5');
+      const told = asked[1].messages.at(-1)!.content!;
+      assertStringIncludes(told, 'not proposed: tried first as session-reap --max=-1 --dry-run');
+      assertStringIncludes(told, "invalid --max '-1'");
+    });
+
     await t.step('a reading command given a flag that writes is proposed, and what may not run is refused', async () => {
       const setting: Script = () => tool('run_command', { command: `attrs -s 'description=Ett exempel' ${ANNA}` });
       assertEquals((await askWith(setting, shq('sätt beskrivningen'))).reply.proposal?.commands[0].command, `attrs -s 'description=Ett exempel' ${ANNA}`);
