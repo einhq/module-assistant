@@ -97,9 +97,19 @@ Deno.test('a JSON result too long for the model keeps its small fields, and the 
   const days = Array.from({ length: 2000 }, (_, index) => ({ key: `2015-01-${index}`, count: index }));
   const facets = { total: 68708, range: { min: 2015, max: 2020 }, days, years: [{ year: 2015, count: 14454 }, { year: 2016, count: 4748 }] };
   const handed = resultJson(facets);
-  assertEquals(handed.length, 4000);
+  assert(handed.endsWith(' more characters not shown)'));
   assertStringIncludes(handed, '"years":[{"year":2015,"count":14454},{"year":2016,"count":4748}]');
   assert(handed.startsWith('{"total":68708,"range":'));
   // Under the limit, the result is as the command printed it.
   assertEquals(resultJson({ b: [1, 2, 3], a: 1 }), '{"b":[1,2,3],"a":1}');
+});
+
+Deno.test('a JSON list too long for the model keeps its first items whole, and says how many more there are', () => {
+  const devices = Array.from({ length: 200 }, (_, index) => ({ name: `device-${index}`, label: `Device ${index}`, online: true }));
+  const handed = resultJson(devices);
+  const [list, note] = handed.split('\n');
+  const kept = JSON.parse(list) as typeof devices;
+  assertEquals(kept[kept.length - 1], devices[kept.length - 1]);
+  assert(list.length <= 4000);
+  assertEquals(note, `… (${200 - kept.length} more of 200 not shown: narrow the command to see them)`);
 });

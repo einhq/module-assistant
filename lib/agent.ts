@@ -564,17 +564,31 @@ const result = (id: string, content: unknown): LlmMessage => ({
 });
 
 /**
- * A JSON result as the model is handed it, cut at `RESULT_CHARS`. Past the limit an object's fields
- * go smallest first, so what the cut takes is the end of its longest list, not the fields after it:
- * `search --facets` prints its long `days` before `years`, and a model never shown the years makes up
- * a count for each.
+ * A JSON result as the model is handed it, cut at `RESULT_CHARS` and saying so: a model handed a
+ * list cut short, not told, takes what it was not shown for not there. A list keeps its first items
+ * whole. Past the limit an object's fields go smallest first, so what the cut takes is the end of its
+ * longest list, not the fields after it: `search --facets` prints its long `days` before `years`, and
+ * a model never shown the years makes up a count for each.
  */
 export const resultJson = (content: unknown): string => {
   const json = JSON.stringify(content) ?? '';
-  if (json.length <= RESULT_CHARS || !content || typeof content !== 'object' || Array.isArray(content)) return json.slice(0, RESULT_CHARS);
+  if (json.length <= RESULT_CHARS || !content || typeof content !== 'object') return json;
+  if (Array.isArray(content)) {
+    const kept: string[] = [];
+    let size = 2;
+    for (const item of content) {
+      const text = JSON.stringify(item) ?? 'null';
+      if (size + text.length + 1 > RESULT_CHARS) break;
+      kept.push(text);
+      size += text.length + 1;
+    }
+    return `[${kept.join(',')}]\n… (${content.length - kept.length} more of ${content.length} not shown: narrow the command to see them)`;
+  }
   const fields = Object.entries(content).map(([key, value], order) => ({ key, value, order, size: (JSON.stringify(value) ?? '').length }));
   fields.sort((a, b) => a.size - b.size || a.order - b.order);
-  return JSON.stringify(Object.fromEntries(fields.map((field) => [field.key, field.value]))).slice(0, RESULT_CHARS);
+  return `${JSON.stringify(Object.fromEntries(fields.map((field) => [field.key, field.value]))).slice(0, RESULT_CHARS)}\n… (${
+    json.length - RESULT_CHARS
+  } more characters not shown)`;
 };
 
 /** A command's text output, cut where it would crowd out the conversation, saying that it was. */
