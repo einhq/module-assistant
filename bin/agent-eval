@@ -10,7 +10,8 @@
  * commands as tools, the same prompt, the same model service (`lib/llm.ts`). The questions are the
  * modules' own (each drop-in's `eval.json`), since each knows what its part should answer. Then
  * it scores what can be scored without a human: did it reach the command the fixture expects, did its lines
- * run, did the reply stay in the user's language. What is measured is what a user gets.
+ * run, did what it proposed hold the words the fixture lists, did the reply stay in the user's language.
+ * What is measured is what a user gets.
  *
  * HOW A MODEL IS TRIED. The prompts, the fast path and these questions are tuned for the models in
  * `TRIED_MODELS` (`lib/llm.ts`), and `health` warns of any other. A run names the model that answered
@@ -40,6 +41,8 @@ type Question = {
   /** What the app shows as it is asked: a page, a picture open in the lightbox. */
   context?: AssistantContext;
   commands: string[];
+  /** Words the line it proposes must each hold: the devices it was told of, the starting point it fits. */
+  proposes?: string[];
 };
 
 /** A file of questions; `resolvers` turn a name into a path, so calling one first is not a wrong first choice. */
@@ -106,6 +109,9 @@ const summarize = (model: string, results: Record<string, unknown>[]) => ({
   commandsRun: results.reduce((n, r) => n + (r.turns as Record<string, unknown>[]).filter((t) => t.verdict === 'ran').length, 0),
   commandsFailed: results.reduce((n, r) => n + (r.turns as Record<string, unknown>[]).filter((t) => t.verdict === 'failed').length, 0),
   proposals: results.reduce((n, r) => n + (r.turns as Record<string, unknown>[]).filter((t) => t.verdict === 'proposed').length, 0),
+  // Of the questions whose proposal is known, those it proposed with every word it should hold.
+  proposalsWanted: results.filter((r) => r.proposedOk !== undefined).length,
+  proposalsOk: results.filter((r) => r.proposedOk === true).length,
   msPerFixture: Math.round(results.reduce((n, r) => n + (r.ms as number), 0) / Math.max(results.length, 1)),
   // Where the time goes, and what thinking costs: model time, calls, tokens written, thought length.
   modelMsPerFixture: Math.round(results.reduce((n, r) => n + ((r.timing as { model?: number } | undefined)?.model ?? 0), 0) / Math.max(results.length, 1)),
@@ -233,6 +239,8 @@ export const agentEval = async (cmd: Command): CmdReturn => {
       else if (step.tool !== FIND_COMMANDS.name && step.tool !== COMMAND_HELP.name) commands.push(step.tool);
     }
     const first = commands.find((name) => !resolvers.has(name) || wanted.has(name));
+    const proposed = reply.steps.find((step) => step.verdict === 'proposed')?.line;
+    const missing = fixture.proposes?.filter((word) => !proposed?.includes(word));
     const reached = commands.some((name) => wanted.has(name));
     const answer = reply.error ? '' : reply.answer;
     // A proposal ends the turn with the drawer's fixed line; its language is the app's, not the model's.
@@ -244,6 +252,7 @@ export const agentEval = async (cmd: Command): CmdReturn => {
       expected: [...wanted],
       first,
       reached,
+      ...(missing ? { proposedOk: missing.length === 0, ...(missing.length ? { proposedMissing: missing } : {}) } : {}),
       answered: Boolean(answer),
       answer,
       languageOk,
@@ -268,7 +277,10 @@ export const agentEval = async (cmd: Command): CmdReturn => {
       messages: reply.transcript,
     });
     if (flags.out) await writeOut(cmd, String(flags.out), model, results, false);
-    if (flags.verbose) await cmd.writeLn(`${fixture.id}: ${reached ? 'reached' : 'missed'} ${[...wanted].join('|')} via ${first ?? '-'}${answer ? '' : ', no answer'}`);
+    if (flags.verbose) {
+      const proposal = missing ? (missing.length ? `, proposal lacks ${missing.join(' ')}` : ', proposal holds all') : '';
+      await cmd.writeLn(`${fixture.id}: ${reached ? 'reached' : 'missed'} ${[...wanted].join('|')} via ${first ?? '-'}${answer ? '' : ', no answer'}${proposal}`);
+    }
   }
 
   const summary = summarize(model, results);
@@ -303,7 +315,7 @@ agentEval.spec = {
     'nohup agent-eval --user /archive/people/anna-exempel --out /tmp/agent-eval.json',
   ],
   returns:
-    'a summary — the model that answered, how often the right command was reached, how many lines ran, how many questions were answered — and the turns of each question.',
+    'a summary — the model that answered, how often the right command was reached, how many lines ran, how many proposals held what they should, how many questions were answered — and the turns of each question.',
 };
 
 export default agentEval;
