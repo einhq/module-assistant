@@ -1,7 +1,8 @@
 /**
  * llm-status against a stub llm: the plain command says what the host profile says and asks the
  * model nothing; `--checks` says whose it is and where, whether it answers, and whether its model is
- * one the assistant was tried with. The guest of a closed archive asks nothing of it.
+ * one the assistant was tried with; `--models` what it offers. The guest of a closed archive asks
+ * nothing of it.
  */
 
 import { assertEquals } from '@std/assert';
@@ -20,10 +21,15 @@ Deno.test({
   const client = await testCtx.server.createShellClient();
   let llmUp = true;
   let offered = ['qwen3.5-4b'];
+  // Lists its models only for its own key header, with the API's version, as Anthropic's list does.
+  let ownKeyHeader = false;
   const llmAsked: { path: string; key: string | null }[] = [];
   const llm = Deno.serve({ port: 0, hostname: '127.0.0.1', onListen: () => {} }, (req) => {
     llmAsked.push({ path: new URL(req.url).pathname, key: req.headers.get('authorization') });
     if (!llmUp) return new Response('loading', { status: 503 });
+    if (ownKeyHeader && !(req.headers.get('x-api-key') === 'sk-test' && req.headers.get('anthropic-version'))) {
+      return Response.json({ type: 'error', error: { type: 'authentication_error' } }, { status: 401 });
+    }
     return Response.json({ object: 'list', data: offered.map((id) => ({ id, object: 'model' })) });
   });
   const llmUrl = `http://127.0.0.1:${llm.addr.port}`;
@@ -86,6 +92,19 @@ Deno.test({
         'Example AI does not offer big-model',
         'big-model is untried: the prompts, the fast path and the eval set are tuned for qwen3.5-4b',
       ]);
+    });
+
+    await t.step('models: what the service offers, also from a list that takes its key as its own header', async () => {
+      offered = ['big-model', 'small-model'];
+      assertEquals(await client.execJson<string[]>(external('--models')), ['big-model', 'small-model']);
+      ownKeyHeader = true;
+      assertEquals(await client.execJson<string[]>(external('--models')), ['big-model', 'small-model']);
+      ownKeyHeader = false;
+      llmUp = false;
+      const away = await client.exec(external('--models'));
+      assertEquals(away.success, false);
+      assertEquals(away.error?.includes('does not say which models it offers'), true);
+      llmUp = true;
     });
 
     await t.step('brief: the checks in a line', async () => {

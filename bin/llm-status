@@ -12,9 +12,10 @@
  *
  * `--checks` answers `health` (the `llm-link` service's `checkCommand`): whether it answers, where it
  * is, and whether its model has been tried with the assistant's prompts (`TRIED_MODELS`). `--brief`
- * is the same in one line, beside the `llm-link` service in `service-list --detail`. None of them
+ * is the same in one line, beside the `llm-link` service in `service-list --detail`. Neither
  * fails: a chat that cannot answer holds up no work of the archive's, so a person is told by a
- * warning, and the verdict stays about the work.
+ * warning, and the verdict stays about the work. `--models` is the list the service offers, for
+ * choosing a provider's model by name, and fails when the service gives none.
  *
  * The model is asked only for a caller who may use it (`mayUseModel`, as `chat` does): the request
  * carries the provider's key to whatever `CFG_LLM_URL` says, and a command line can say anything.
@@ -28,20 +29,35 @@ import { llmAuth, llmBase, llmModel, mayUseModel, TRIED_MODELS } from '../lib/ll
 
 const CARDS = ['card', 'cpu'] as const;
 
-/** The models the server offers (`GET /v1/models`, which every OpenAI-compatible one answers), or null when it does not answer. */
+/** The version of Anthropic's API its own model list is asked in. */
+const ANTHROPIC_VERSION = '2023-06-01';
+
+/**
+ * The models the server offers (`GET /v1/models`, which every OpenAI-compatible one answers), or
+ * null when it does not answer. Anthropic's list takes its key as `x-api-key` with the API's
+ * version, not as the bearer its chat takes, so a key that is refused is offered that way once.
+ */
 const offeredModels = async (cmd: Command, base: string): Promise<string[] | null> => {
-  try {
-    const response = await fetch(`${base}/v1/models`, { headers: await llmAuth(cmd), signal: AbortSignal.timeout(2000) });
+  const ask = async (headers: Record<string, string>): Promise<string[] | null> => {
+    const response = await fetch(`${base}/v1/models`, { headers, signal: AbortSignal.timeout(MODELS_TIMEOUT_MS) });
     if (!response.ok) {
       await response.body?.cancel();
       return null;
     }
     const body = await response.json() as { data?: { id?: unknown }[] };
     return (body.data ?? []).map((model) => model.id).filter((id): id is string => typeof id === 'string');
+  };
+  try {
+    const auth = await llmAuth(cmd);
+    const key = auth.authorization?.replace(/^Bearer /, '');
+    return await ask(auth) ?? (key ? await ask({ 'x-api-key': key, 'anthropic-version': ANTHROPIC_VERSION }) : null);
   } catch {
     return null;
   }
 };
+
+/** How long the model list is waited for: a provider's is a request across the internet. */
+const MODELS_TIMEOUT_MS = 5000;
 
 /** What the host profile says. */
 const readStatus = (cmd: Command): LlmStatus => {
@@ -87,10 +103,20 @@ const checksOf = (status: LlmStatus, offered: string[] | null): HealthCheck[] =>
 
 const llmStatus = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
-  const flags = parseArgs(cmd.args, { boolean: ['checks', 'brief'], unknown: collectUnknownFlags(unknown) });
+  const flags = parseArgs(cmd.args, { boolean: ['checks', 'brief', 'models'], unknown: collectUnknownFlags(unknown) });
   if (await reportUnknownFlags(cmd, unknown)) return 1;
 
   const mayAsk = await mayUseModel(cmd);
+  if (flags.models) {
+    const offered = mayAsk ? await offeredModels(cmd, llmBase(cmd)) : null;
+    if (offered === null) {
+      await cmd.writeError(`llm-status: ${mayAsk ? `${llmBase(cmd)} does not say which models it offers` : 'the language model is not yours to ask'}\n`);
+      return 1;
+    }
+    if (cmd.json) await cmd.writeJSON(offered satisfies string[]);
+    else for (const model of offered) await cmd.writeLn(model);
+    return 0;
+  }
   if (flags.checks || flags.brief) {
     const checks = mayAsk ? checksOf(readStatus(cmd), await offeredModels(cmd, llmBase(cmd))) : [];
     if (flags.brief) {
@@ -121,12 +147,14 @@ llmStatus.spec = {
   name: 'llm-status',
   effect: 'read' as const,
   description: "Whose the assistant's language model is, where it runs, and (with --checks) whether it answers",
-  examples: ['llm-status', 'llm-status --checks'],
+  examples: ['llm-status', 'llm-status --checks', 'llm-status --models'],
   flags: [
     { name: 'checks', type: 'bool' as const, description: 'The checks health reads: whether it answers, where it is, whether its model has been tried' },
     { name: 'brief', type: 'bool' as const, description: 'The checks in one line (used by service-list --detail)' },
+    { name: 'models', type: 'bool' as const, description: 'The models the service offers, as it lists them' },
   ],
-  returns: "url, model, kind (ours or external), provider for an external one, card (card or cpu) for ours. With --checks, health's checks.",
+  returns:
+    "url, model, kind (ours or external), provider for an external one, card (card or cpu) for ours. With --checks, health's checks; with --models, the names of the models the service offers.",
 };
 
 export default llmStatus;

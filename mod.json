@@ -3,7 +3,7 @@
   "version": "0.11.1",
   "description": "Assistant: answers questions by running EiN's commands for the user, with what the installed modules offer it",
   "license": "MIT",
-  "coreApi": "^0.15.0",
+  "coreApi": "^0.15.4",
   "imports": {
     "@assistant/agent": "./lib/agent.ts",
     "@assistant/answer-links": "./lib/answer-links.ts",
@@ -30,7 +30,8 @@
       "/chart": "ui/pages/chart.tsx",
       "/chat": "ui/pages/chat.tsx",
       "/chat/:id": "ui/pages/chat.tsx",
-      "/about/language-model": "ui/pages/about.tsx"
+      "/about/language-model": "ui/pages/about.tsx",
+      "/settings/language-model": "ui/pages/settings-model.tsx"
     }
   },
   "config": {

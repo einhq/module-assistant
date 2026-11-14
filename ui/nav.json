@@ -28,6 +28,16 @@
       "label": "Language model",
       "icon": "message-circle",
       "route": "/about/language-model"
+    },
+    {
+      "id": "assistant.model",
+      "slot": "settings.views",
+      "label": "Language model",
+      "description": "Who answers the chat: this machine's model, or a provider's with its key.",
+      "icon": "message-circle",
+      "route": "/settings/language-model",
+      "admin": true,
+      "order": 20
     }
   ]
 }
