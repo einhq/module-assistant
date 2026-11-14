@@ -72,6 +72,41 @@ Deno.test('CFG_LLM_THINKING asks the server to think or not; unset, the request 
   }
 });
 
+Deno.test("ours is asked at temperature 0, a provider's model at its own", async () => {
+  const model = startStubLlm(() => 'ok');
+  try {
+    const at = (provider?: string) =>
+      ({ access: ADMIN_ACCESS, env: { CFG_LLM_URL: model.url, ...(provider ? { CFG_LLM_PROVIDER: provider } : {}) }, interrupted: false, sys }) as unknown as Command;
+    await chat(at(), said);
+    await chat(at('Example AI'), said);
+    assertEquals(model.requests.map((request) => (request as { temperature?: number }).temperature), [0, undefined]);
+  } finally {
+    await model.close();
+  }
+});
+
+Deno.test('a service that refuses max_tokens is asked with max_completion_tokens, from then on', async () => {
+  const bodies: Record<string, unknown>[] = [];
+  const server = Deno.serve({ port: 0, hostname: '127.0.0.1', onListen: () => {} }, async (req) => {
+    const body = await req.json() as Record<string, unknown>;
+    bodies.push(body);
+    if ('max_tokens' in body) {
+      return Response.json({ error: { message: "Unsupported parameter: 'max_tokens'", type: 'invalid_request_error', param: 'max_tokens', code: 'unsupported_parameter' } }, {
+        status: 400,
+      });
+    }
+    return Response.json({ model: 'reasoner', choices: [{ message: { role: 'assistant', content: 'ok' } }] });
+  });
+  try {
+    const url = `http://127.0.0.1:${(server.addr as Deno.NetAddr).port}`;
+    assertEquals((await chat(commandAt(url), said, { maxTokens: 300 })).content, 'ok');
+    assertEquals((await chat(commandAt(url), said, { maxTokens: 300 })).content, 'ok');
+    assertEquals(bodies.map((body) => [body.max_tokens, body.max_completion_tokens]), [[300, undefined], [undefined, 300], [undefined, 300]]);
+  } finally {
+    await server.shutdown();
+  }
+});
+
 /** A server whose every request is answered by `respond`, the first one being number 1. */
 const serve = (respond: (n: number) => Response) => {
   let n = 0;

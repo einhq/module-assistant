@@ -17,7 +17,8 @@
  *
  * Only standard fields are sent, so a hosted API accepts the request as it is; what is particular
  * to a local model — thinking off, a chat template that keeps history stable for the cache — is
- * the server's to set. Tools go as the API's `tools` and come back as its `tool_calls`, parsed by
+ * the server's to set. A provider's model (`CFG_LLM_PROVIDER`) is left its own temperature, and a
+ * service that refuses `max_tokens` is asked again with `max_completion_tokens`. Tools go as the API's `tools` and come back as its `tool_calls`, parsed by
  * the server; a model that writes its call as text instead is still read, by the caller, from
  * `content`.
  *
@@ -112,6 +113,16 @@ const contextError = (base: string, raw: unknown): LlmContextError | undefined =
   if (limit) contexts.set(base, limit);
   return new LlmContextError(`${base}: ${String(error.message ?? 'longer than the context')}`, count(error.n_prompt_tokens), limit);
 };
+
+/**
+ * The services that refused `max_tokens`, by base, which take `max_completion_tokens` instead:
+ * OpenAI's newer name for it, the only one its reasoning models accept. llama.cpp and most others
+ * know only the first, so it is what a service is sent until it refuses it.
+ */
+const completionTokens = new Set<string>();
+
+/** Whether a refusal names `max_tokens` as the field the service does not take, as OpenAI's says. */
+const refusesMaxTokens = (raw: unknown): boolean => asRecord(asRecord(raw)?.error)?.param === 'max_tokens';
 
 /**
  * How many tokens the model reads at most, prompt and answer together, when the service says:
@@ -314,8 +325,10 @@ const request = async (cmd: Command, messages: LlmMessage[], opts: ChatOptions, 
           model,
           messages,
           ...(opts.tools?.length ? { tools: opts.tools } : {}),
-          temperature: 0,
-          max_tokens: opts.maxTokens ?? 768,
+          // Ours answers alike each time at 0, as the eval set measures it. A provider's keeps its
+          // own: Claude from 4.7 and OpenAI's reasoning models refuse any but their default.
+          ...(cmd.env.CFG_LLM_PROVIDER?.trim() ? {} : { temperature: 0 }),
+          [completionTokens.has(base) ? 'max_completion_tokens' : 'max_tokens']: opts.maxTokens ?? 768,
           ...(thinking !== undefined ? { chat_template_kwargs: { enable_thinking: thinking } } : {}),
           ...(opts.onDraft ? { stream: true, stream_options: { include_usage: true } } : {}),
         }),
@@ -332,6 +345,10 @@ const request = async (cmd: Command, messages: LlmMessage[], opts: ChatOptions, 
       try {
         said = JSON.parse(text);
       } catch { /* a gateway's page, or nothing */ }
+      if (response.status === 400 && !completionTokens.has(base) && refusesMaxTokens(said)) {
+        completionTokens.add(base);
+        return await request(cmd, messages, opts, answered);
+      }
       throw contextError(base, said) ??
         new (AWAY_STATUSES.has(response.status) ? LlmAwayError : LlmUnavailableError)(`${base}: HTTP ${response.status} ${text.slice(0, 300)}`);
     }
