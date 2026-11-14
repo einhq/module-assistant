@@ -249,6 +249,21 @@ Deno.test('a caller that does not wait is told at once; CFG_LLM_WAIT bounds the 
   }
 });
 
+Deno.test('an ask that is not answered is given up on when the wait is over', async () => {
+  // Away at first, then too slow to say anything: the wait ends at CFG_LLM_WAIT, give or take the last ask.
+  const late: (() => void)[] = [];
+  const slow = serve((n) => n === 1 ? LOADING() : new Promise<Response>((resolve) => late.push(() => resolve(LOADING()))) as unknown as Response);
+  const cmd = { access: ADMIN_ACCESS, env: { CFG_LLM_URL: slow.url, CFG_LLM_WAIT: '2' }, interrupted: false, sys } as unknown as Command;
+  try {
+    const startedAt = Date.now();
+    await assertRejects(() => chat(cmd, said, { wait: true }), LlmUnavailableError, 'no answer; still away after');
+    assert(Date.now() - startedAt < 4000, `${Date.now() - startedAt} ms`);
+  } finally {
+    late.forEach((answer) => answer());
+    await slow.close();
+  }
+});
+
 Deno.test('a stopped command stops waiting', async () => {
   const cmd = { ...commandAt('http://127.0.0.1:1'), interrupted: false } as { interrupted: boolean };
   setTimeout(() => cmd.interrupted = true, 300);

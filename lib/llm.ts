@@ -160,6 +160,10 @@ const DEFAULT_WAIT_SECONDS = 180;
 /** The pause between asks of a service that is away, doubling from the first to the last. */
 const FIRST_PAUSE_MS = 1000;
 const LAST_PAUSE_MS = 5000;
+/** How long the last ask of a wait has to be answered, though the wait is over: enough for a service that is there. */
+const LAST_ASK_MS = 1000;
+/** Why an ask was given up on: the wait for a service that is away is over. */
+const WAIT_OVER = new Error('no answer');
 
 /**
  * The models the prompts, the fast path and the eval set (`eval/questions.json`) are tuned for, and
@@ -299,14 +303,18 @@ export const llmAuth = async (cmd: Command): Promise<Record<string, string>> => 
   return key ? { authorization: `Bearer ${key}` } : {};
 };
 
-/** One request to the service; `answered` hears that it answered at all, before its answer is read. */
-const request = async (cmd: Command, messages: LlmMessage[], opts: ChatOptions, answered: () => void): Promise<LlmReply> => {
+/**
+ * One request to the service; `answered` hears that it answered at all, before its answer is read.
+ * Until it answers, it is given up on as away at `awayUntil`, or `LAST_ASK_MS` from now if later.
+ */
+const request = async (cmd: Command, messages: LlmMessage[], opts: ChatOptions, answered: () => void, awayUntil?: number): Promise<LlmReply> => {
   const base = llmBase(cmd);
   const model = llmModel(cmd);
   const thinking = opts.thinking ?? (cmd.env.CFG_LLM_THINKING === '1' ? true : cmd.env.CFG_LLM_THINKING === '0' ? false : undefined);
   const controller = new AbortController();
   // Both cover the body as well as the headers: a streamed answer is generated while it is read.
   const timer = setTimeout(() => controller.abort(new Error('timed out')), (opts.timeoutSeconds ?? 180) * 1000);
+  const waitOver = awayUntil === undefined ? undefined : setTimeout(() => controller.abort(WAIT_OVER), Math.max(awayUntil - Date.now(), LAST_ASK_MS));
   // Stopped means stopped: an interrupted turn must not leave the server generating for nobody.
   const watch = setInterval(() => {
     if (cmd.interrupted) controller.abort(new Error('interrupted'));
@@ -335,7 +343,9 @@ const request = async (cmd: Command, messages: LlmMessage[], opts: ChatOptions, 
         signal: controller.signal,
       });
     } catch (error) {
-      // Refused, reset, or no such host: away. Our own abort — out of time, or stopped — is not.
+      // Refused, reset, no such host, or no answer before the wait is over: away. Our own abort — out
+      // of time, or stopped — is not.
+      if (controller.signal.reason === WAIT_OVER) throw new LlmAwayError(`${base}: ${WAIT_OVER.message}`);
       const reason = `${base}: ${error instanceof Error ? error.message : String(error)}`;
       throw new (controller.signal.aborted ? LlmUnavailableError : LlmAwayError)(reason);
     }
@@ -347,17 +357,19 @@ const request = async (cmd: Command, messages: LlmMessage[], opts: ChatOptions, 
       } catch { /* a gateway's page, or nothing */ }
       if (response.status === 400 && !completionTokens.has(base) && refusesMaxTokens(said)) {
         completionTokens.add(base);
-        return await request(cmd, messages, opts, answered);
+        return await request(cmd, messages, opts, answered, awayUntil);
       }
       throw contextError(base, said) ??
         new (AWAY_STATUSES.has(response.status) ? LlmAwayError : LlmUnavailableError)(`${base}: HTTP ${response.status} ${text.slice(0, 300)}`);
     }
+    clearTimeout(waitOver);
     answered();
     body = (response.headers.get('content-type') ?? '').includes('text/event-stream')
       ? await readStream(base, response, controller.signal, opts.onDraft)
       : await readJson(base, response, controller.signal);
   } finally {
     clearTimeout(timer);
+    clearTimeout(waitOver);
     clearInterval(watch);
   }
   const choice = asRecord((body.choices as unknown[] | undefined)?.[0]);
@@ -422,7 +434,7 @@ export const chat = async (cmd: Command, messages: LlmMessage[], opts: ChatOptio
   try {
     for (let pause = FIRST_PAUSE_MS;; pause = Math.min(pause * 2, LAST_PAUSE_MS)) {
       try {
-        const reply = await request(cmd, messages, opts, answered);
+        const reply = await request(cmd, messages, opts, answered, awaySince === undefined ? undefined : awaySince + waitMs);
         return awayMs === undefined ? reply : { ...reply, awayMs };
       } catch (error) {
         if (!(error instanceof LlmAwayError) || waitMs <= 0) throw error;
