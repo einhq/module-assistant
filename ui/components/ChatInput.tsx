@@ -41,9 +41,9 @@ export function ChatInput() {
     void ask(text);
   };
 
-  // Enter is a new line, as in every other text box; Ctrl+Enter (Cmd+Enter on a Mac) sends.
+  // Enter sends; Shift+Enter is a new line. Enter that ends an IME composition only commits it.
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSubmit();
     }
