@@ -1,9 +1,9 @@
 {
   "name": "assistant",
-  "version": "0.11.3",
+  "version": "0.11.4",
   "description": "Assistant: answers questions by running EiN's commands for the user, with what the installed modules offer it",
   "license": "MIT",
-  "coreApi": "^0.15.4",
+  "coreApi": "^0.15.47",
   "imports": {
     "@assistant/agent": "./lib/agent.ts",
     "@assistant/answer-links": "./lib/answer-links.ts",

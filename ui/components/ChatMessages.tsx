@@ -1,4 +1,4 @@
-import { CodeMirror, CoverAvatar, MediaGrid, RoutePanel, ScrollBox, TablerIcon } from '@ein/ui/components';
+import { AccountFace, CodeMirror, MediaGrid, RoutePanel, ScrollBox, TablerIcon } from '@ein/ui/components';
 import { Alert, Anchor, Avatar, Box, Button, Collapse, Group, Loader, Stack, Table, Text, Timeline, Tooltip, UnstyledButton } from '@mantine/core';
 import { useSignals } from '@preact/signals-react/runtime';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
@@ -35,24 +35,11 @@ const CHAT_ROW_HEIGHT = 96;
 
 function UserChatAvatar() {
   const user = currentUser.value;
-  return user?.personPath
-    ? (
-      <CoverAvatar
-        path={user.personPath}
-        fallback={user.name?.charAt(0) || <TablerIcon name='user' size={16} />}
-        fallbackSrc={user.avatarUrl}
-        size={32}
-        radius='xl'
-        color='marine'
-        alt={user.name}
-        eager
-      />
-    )
-    : (
-      <Avatar src={user?.avatarUrl} size='sm' radius='xl' color='marine' alt={user?.name}>
-        {user?.name?.charAt(0) || <TablerIcon name='user' size={16} />}
-      </Avatar>
-    );
+  return user ? <AccountFace account={{ ...user, name: user.name ?? user.username }} size={32} eager /> : (
+    <Avatar size={32} radius='xl' color='marine'>
+      <TablerIcon name='user' size={16} />
+    </Avatar>
+  );
 }
 
 function TimestampedAvatar({ timestamp, children }: { timestamp: Date; children: ReactNode }) {
